@@ -92,3 +92,69 @@ test(unsolvable_board, true(Result == unsolvable)) :-
     hint([[B, A | Rest] | Rows], Result).
 
 :- end_tests(hint).
+
+/*  Sudoku diagonal: as duas diagonais principais também não repetem
+    números. Os testes conferem a regra nova e que o resolvedor, o gerador
+    e a dica passam a respeitá-la só com a troca da variante.
+*/
+
+:- begin_tests(diagonal).
+
+%   all_different_values(+List): a lista tem 9 números, todos diferentes.
+%   sort/2 remove repetições; se nada foi removido, não havia repetição.
+all_different_values(List) :-
+    sort(List, Sorted),
+    length(Sorted, 9).
+
+test(diagonals_pick_the_right_cells,
+     true(Main-Anti == [0, 11, 22, 33, 44, 55, 66, 77, 88]
+                       -[8, 17, 26, 35, 44, 53, 62, 71, 80])) :-
+    % Casa (L, C) vale 10*L + C, então o valor diz a posição: 35 é (3,5).
+    % A casa central, 44, aparece nas duas diagonais.
+    findall(Row,
+            ( between(0, 8, L),
+              findall(V, ( between(0, 8, C), V is 10 * L + C ), Row) ),
+            Rows),
+    diagonals(Rows, Main, Anti).
+
+test(solution_has_distinct_diagonals) :-
+    example_diagonal_puzzle(P),
+    solve(diagonal, P, S),
+    diagonals(S, Main, Anti),
+    all_different_values(Main),
+    all_different_values(Anti).
+
+test(diagonal_rule_makes_solution_unique, true(Diagonal-Classic == 1-2)) :-
+    % O mesmo puzzle: solução única com a regra diagonal, várias sem ela.
+    example_diagonal_puzzle(P),
+    count_solutions(diagonal, P, 2, Diagonal),
+    count_solutions(classic, P, 2, Classic).
+
+test(classic_example_has_no_diagonal_solution, fail) :-
+    % A única solução clássica deste puzzle repete números numa diagonal.
+    % Como toda solução diagonal também é clássica, não sobra nenhuma.
+    example_puzzle(P),
+    solve(diagonal, P, _).
+
+test(generated_puzzle_is_unique, true(N == 1)) :-
+    generate(diagonal, hard, P),
+    count_solutions(diagonal, P, 2, N).
+
+test(generated_solution_respects_diagonals) :-
+    generate(diagonal, medium, P),
+    solve(diagonal, P, S),
+    diagonals(S, Main, Anti),
+    all_different_values(Main),
+    all_different_values(Anti).
+
+test(hint_matches_diagonal_solution, true(Value == Expected)) :-
+    example_diagonal_puzzle(P),
+    hint(diagonal, P, [Row, Col, Value]),
+    solve(diagonal, P, S),
+    nth0(Row, S, SRow), nth0(Col, SRow, Expected).
+
+test(unknown_variant, error(type_error(_, killer))) :-
+    example_puzzle(P),
+    solve(killer, P, _).
+
+:- end_tests(diagonal).

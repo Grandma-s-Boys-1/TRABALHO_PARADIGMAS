@@ -31,23 +31,40 @@
     satisfazem tudo isso. Esse é o espírito do paradigma lógico/declarativo:
     descrevemos O QUE é uma solução, não COMO encontrá-la.
 
+    VARIANTES
+    ---------
+    Além do Sudoku clássico, o sistema joga o Sudoku DIAGONAL (ou "Sudoku
+    X"), em que as duas diagonais principais também não repetem números.
+    Os predicados públicos têm uma versão que recebe a variante como
+    primeiro argumento (solve/3, generate/3, hint/3...). As versões sem ela
+    (solve/2, generate/2, hint/2...) jogam o clássico. Veja a seção 2.
+
     COMO TESTAR NO TERMINAL
     -----------------------
         $ swipl backend/prolog/sudoku.pl
         ?- example_puzzle(P), solve(P, S), print_grid(S).
         ?- generate(medium, P), print_grid(P).
+        ?- generate(diagonal, hard, P), print_grid(P).
+        ?- example_diagonal_puzzle(P), count_solutions(classic, P, 10, N).
 */
 
 % Um módulo define quais predicados são "públicos" (exportados). Os demais
 % ficam privados ao arquivo. A notação nome/N indica o nome do predicado e
 % sua aridade (número de argumentos): solve/2 recebe 2 argumentos.
 :- module(sudoku,
-          [ solve/2,             % +Puzzle, -Solution
-            count_solutions/3,   % +Puzzle, +Limit, -Count
-            generate/2,          % +Difficulty, -Puzzle
-            hint/2,              % +Board, -Result
-            example_puzzle/1,    % -Puzzle
-            print_grid/1         % +Grid
+          [ solve/2,                    % +Puzzle, -Solution
+            solve/3,                    % +Variant, +Puzzle, -Solution
+            count_solutions/3,          % +Puzzle, +Limit, -Count
+            count_solutions/4,          % +Variant, +Puzzle, +Limit, -Count
+            generate/2,                 % +Difficulty, -Puzzle
+            generate/3,                 % +Variant, +Difficulty, -Puzzle
+            hint/2,                     % +Board, -Result
+            hint/3,                     % +Variant, +Board, -Result
+            variant/1,                  % ?Variant
+            diagonals/3,                % +Rows, -Main, -Anti
+            example_puzzle/1,           % -Puzzle
+            example_diagonal_puzzle/1,  % -Puzzle
+            print_grid/1                % +Grid
           ]).
 
 % Convenção de documentação usada acima e abaixo:
@@ -66,17 +83,18 @@
    1. AS REGRAS DO SUDOKU (restrições)
    ========================================================================= */
 
-%!  sudoku_constraints(?Rows) is det.
+%!  sudoku_constraints(+Variant, ?Rows) is det.
 %
-%   Impõe sobre Rows todas as regras do Sudoku. Rows pode conter tanto
-%   números já conhecidos quanto VARIÁVEIS ainda livres (as casas vazias).
+%   Impõe sobre Rows todas as regras do Sudoku da variante Variant. Rows
+%   pode conter tanto números já conhecidos quanto VARIÁVEIS ainda livres
+%   (as casas vazias).
 %
 %   Importante: este predicado NÃO resolve o puzzle. Ele apenas registra as
 %   restrições. O CLP(FD) já faz "propagação" nesse momento (por exemplo,
 %   se uma linha já tem 1..8, a variável restante só pode ser 9), mas para
 %   garantir que todas as casas recebam valores é preciso chamar label/1
 %   ou labeling/2 depois.
-sudoku_constraints(Rows) :-
+sudoku_constraints(Variant, Rows) :-
     % length/2 com uma variável livre cria uma lista com 9 elementos, ou
     % verifica que Rows já tem 9 elementos. Predicados Prolog frequentemente
     % funcionam "nos dois sentidos" assim.
@@ -106,7 +124,10 @@ sudoku_constraints(Rows) :-
     Rows = [R1, R2, R3, R4, R5, R6, R7, R8, R9],
     blocks(R1, R2, R3),
     blocks(R4, R5, R6),
-    blocks(R7, R8, R9).
+    blocks(R7, R8, R9),
+
+    % Regras extras da variante (nenhuma, no clássico). Veja a seção 2.
+    variant_constraints(Variant, Rows).
 
 %!  blocks(?RowA, ?RowB, ?RowC) is det.
 %
@@ -123,7 +144,78 @@ blocks([A1, A2, A3 | As],
 
 
 /* =========================================================================
-   2. CONVERSÃO ENTRE "0 = vazio" E VARIÁVEIS LÓGICAS
+   2. VARIANTES
+   =========================================================================
+
+   Uma variante é o Sudoku clássico MAIS algumas restrições. Com o CLP(FD),
+   acrescentar uma regra não exige mexer no resolvedor, no gerador nem na
+   dica: todos eles chamam sudoku_constraints/2, que chama
+   variant_constraints/2, e passam a respeitar a regra nova sozinhos.
+
+   Sudoku diagonal ("Sudoku X"): além de linhas, colunas e blocos, cada uma
+   das duas diagonais principais também tem os números de 1 a 9 sem repetir.
+
+       \ . . . . . . . /
+       . \ . . . . . / .
+       . . \ . . . / . .
+       . . . \ . / . . .
+       . . . . X . . . .      <- a casa central está nas DUAS diagonais
+       . . . / . \ . . .
+       . . / . . . \ . .
+       . / . . . . . \ .
+       / . . . . . . . \
+*/
+
+%!  variant(?Variant) is nondet.
+%
+%   Fatos: as variantes que o sistema conhece. Também servem para validar o
+%   que chega do Python (veja check_variant/1).
+variant(classic).
+variant(diagonal).
+
+%!  variant_constraints(+Variant, ?Rows) is det.
+%
+%   As regras que cada variante acrescenta ao clássico, uma cláusula por
+%   variante. O Prolog escolhe a cláusula pelo casamento do primeiro
+%   argumento com o átomo da cabeça (e, por indexar o primeiro argumento,
+%   não deixa ponto de escolha). Uma variante nova é só mais uma cláusula.
+variant_constraints(classic, _Rows).
+variant_constraints(diagonal, Rows) :-
+    diagonals(Rows, Main, Anti),
+    all_distinct(Main),
+    all_distinct(Anti).
+
+%!  diagonals(+Rows, -Main, -Anti) is det.
+%
+%   Main é a diagonal principal, as casas (0,0), (1,1), ..., (8,8), e Anti é
+%   a antidiagonal, as casas (0,8), (1,7), ..., (8,0). As casas podem ser
+%   números ou variáveis ainda livres: diagonals/3 não olha os valores, só
+%   junta as MESMAS casas (as mesmas variáveis) numa lista nova. Por isso uma
+%   restrição sobre Main restringe as casas do tabuleiro.
+%
+%   Na diagonal principal, a casa I fica na linha I. maplist/4 percorre a
+%   lista de índices e a de linhas ao mesmo tempo, chamando
+%   nth0(I, Linha, Casa) para cada par. A antidiagonal é a diagonal principal
+%   do tabuleiro espelhado (cada linha invertida); reaproveitamos a mesma
+%   ideia em vez de fazer contas com 8 - I.
+diagonals(Rows, Main, Anti) :-
+    numlist(0, 8, Indexes),
+    maplist(nth0, Indexes, Rows, Main),
+    maplist(reverse, Rows, Mirrored),
+    maplist(nth0, Indexes, Mirrored, Anti).
+
+%!  check_variant(+Variant) is det.
+%
+%   Lança um erro legível se Variant não for uma variante conhecida. Sem
+%   isso, uma variante desconhecida faria variant_constraints/2 FALHAR, e
+%   solve/3 responderia "sem solução", o que esconderia o erro de verdade.
+check_variant(Variant) :-
+    findall(Known, variant(Known), Variants),
+    must_be(oneof(Variants), Variant).
+
+
+/* =========================================================================
+   3. CONVERSÃO ENTRE "0 = vazio" E VARIÁVEIS LÓGICAS
    ========================================================================= */
 
 %!  grid_vars(+Grid, -Vars) is det.
@@ -148,16 +240,22 @@ cell_var(N, N).
 
 
 /* =========================================================================
-   3. RESOLVER
+   4. RESOLVER
    ========================================================================= */
 
 %!  solve(+Puzzle, -Solution) is semidet.
+%!  solve(+Variant, +Puzzle, -Solution) is semidet.
 %
-%   Solution é uma solução de Puzzle. Falha se o puzzle não tiver solução.
+%   Solution é uma solução de Puzzle segundo as regras de Variant. Falha se
+%   o puzzle não tiver solução. solve/2 é o Sudoku clássico.
 %   "semidet" significa: ou tem sucesso uma única vez, ou falha.
 solve(Puzzle, Solution) :-
+    solve(classic, Puzzle, Solution).
+
+solve(Variant, Puzzle, Solution) :-
+    check_variant(Variant),
     grid_vars(Puzzle, Solution),
-    sudoku_constraints(Solution),
+    sudoku_constraints(Variant, Solution),
     append(Solution, Cells),
 
     % labeling/2 atribui valores concretos às variáveis, fazendo busca com
@@ -170,12 +268,17 @@ solve(Puzzle, Solution) :-
     !.
 
 %!  count_solutions(+Puzzle, +Limit, -Count) is det.
+%!  count_solutions(+Variant, +Puzzle, +Limit, -Count) is det.
 %
 %   Count é o número de soluções de Puzzle, contando no máximo até Limit.
 %   Usado para verificar se um puzzle tem solução ÚNICA (Count == 1 com
 %   Limit = 2): não precisamos saber se são 2 ou 2 milhões, basta saber que
 %   há mais de uma.
 count_solutions(Puzzle, Limit, Count) :-
+    count_solutions(classic, Puzzle, Limit, Count).
+
+count_solutions(Variant, Puzzle, Limit, Count) :-
+    check_variant(Variant),
     grid_vars(Puzzle, Rows),
     append(Rows, Cells),
 
@@ -183,17 +286,17 @@ count_solutions(Puzzle, Limit, Count) :-
     % limit/2 interrompe a enumeração depois de Limit respostas.
     % O objetivo entre parênteses é uma conjunção (vírgula = "e").
     findall(x,
-            limit(Limit, ( sudoku_constraints(Rows),
+            limit(Limit, ( sudoku_constraints(Variant, Rows),
                            labeling([ff], Cells) )),
             Found),
     length(Found, Count).
 
-unique_solution(Puzzle) :-
-    count_solutions(Puzzle, 2, 1).
+unique_solution(Variant, Puzzle) :-
+    count_solutions(Variant, Puzzle, 2, 1).
 
 
 /* =========================================================================
-   4. GERADOR
+   5. GERADOR
    =========================================================================
 
    Algoritmo em duas etapas:
@@ -210,6 +313,12 @@ unique_solution(Puzzle) :-
 
    Essa estratégia gulosa nem sempre consegue chegar a poucas pistas (o
    mínimo teórico é 17), mas para ~24 ou mais funciona bem e é rápida.
+
+   O gerador não sabe nada de diagonais. Ele só repassa a variante para
+   sudoku_constraints/2 e unique_solution/2, e isso basta: a grade
+   completa sai com diagonais válidas, e um buraco só é aceito se a solução
+   continuar única SEGUNDO AS REGRAS DA VARIANTE. Por isso um puzzle
+   diagonal pode ter várias soluções no clássico (veja os testes).
 */
 
 %!  difficulty_clues(?Difficulty, ?Clues) is nondet.
@@ -220,28 +329,33 @@ difficulty_clues(medium, 32).
 difficulty_clues(hard,   26).
 
 %!  generate(+Difficulty, -Puzzle) is det.
+%!  generate(+Variant, +Difficulty, -Puzzle) is det.
 generate(Difficulty, Puzzle) :-
+    generate(classic, Difficulty, Puzzle).
+
+generate(Variant, Difficulty, Puzzle) :-
+    check_variant(Variant),
     % must_be/2 lança um erro legível se o argumento não for do tipo
     % esperado. oneof([...]) aceita só um dos átomos listados.
     must_be(oneof([easy, medium, hard]), Difficulty),
     difficulty_clues(Difficulty, Target),
-    random_full_grid(Full),
+    random_full_grid(Variant, Full),
 
     % numlist(0, 80, L) cria [0, 1, ..., 80]: os índices de todas as casas.
     numlist(0, 80, Indexes),
     random_permutation(Indexes, Order),
     append(Full, FlatFull),
-    dig_holes(Order, Target, FlatFull, FlatPuzzle),
+    dig_holes(Variant, Order, Target, FlatFull, FlatPuzzle),
     rows_of_9(FlatPuzzle, Puzzle),
 
-    % O corte final torna generate/2 determinístico: não queremos que um
+    % O corte final torna generate/3 determinístico: não queremos que um
     % backtracking posterior tente "gerar de novo" por caminhos alternativos.
     !.
 
-%!  random_full_grid(-Grid) is det.
-random_full_grid(Rows) :-
-    length(Rows, 9),              % 9 linhas, cada uma ainda desconhecida
-    sudoku_constraints(Rows),     % (aqui as linhas ganham 9 variáveis cada)
+%!  random_full_grid(+Variant, -Grid) is det.
+random_full_grid(Variant, Rows) :-
+    length(Rows, 9),                     % 9 linhas, cada uma ainda desconhecida
+    sudoku_constraints(Variant, Rows),   % (aqui as linhas ganham 9 variáveis cada)
     append(Rows, Cells),
     random_labeling(Cells),
     !.
@@ -268,25 +382,25 @@ random_labeling([Var | Vars]) :-
     ),
     random_labeling(Vars).
 
-%!  dig_holes(+Order, +Target, +Flat0, -Flat) is det.
+%!  dig_holes(+Variant, +Order, +Target, +Flat0, -Flat) is det.
 %
 %   Percorre os índices em Order tentando zerar cada casa. `Flat0` e `Flat`
 %   são o tabuleiro "achatado" (81 elementos) antes e depois.
 %
 %   Repare que não há atribuição destrutiva: cada passo cria uma NOVA lista.
 %   Em Prolog (e em Elm!) os dados são imutáveis.
-dig_holes([], _Target, Flat, Flat).
-dig_holes([Index | Rest], Target, Flat0, Flat) :-
+dig_holes(_Variant, [], _Target, Flat, Flat).
+dig_holes(Variant, [Index | Rest], Target, Flat0, Flat) :-
     clue_count(Flat0, Clues),
     (   Clues =< Target
     ->  Flat = Flat0                      % já chegamos ao alvo: pare
     ;   replace_nth0(Index, Flat0, 0, Candidate),
         rows_of_9(Candidate, CandidateRows),
-        (   unique_solution(CandidateRows)
+        (   unique_solution(Variant, CandidateRows)
         ->  Next = Candidate              % remoção aceita
         ;   Next = Flat0                  % remoção recusada
         ),
-        dig_holes(Rest, Target, Next, Flat)
+        dig_holes(Variant, Rest, Target, Next, Flat)
     ).
 
 %   clue_count(+Flat, -N): quantas casas diferentes de 0.
@@ -313,10 +427,11 @@ rows_of_9(Flat, [Row | Rows]) :-
 
 
 /* =========================================================================
-   5. DICA
+   6. DICA
    ========================================================================= */
 
 %!  hint(+Board, -Result) is det.
+%!  hint(+Variant, +Board, -Result) is det.
 %
 %   Board é o tabuleiro atual do jogador (pistas + o que ele já preencheu).
 %   Result diz o que aconteceu:
@@ -331,7 +446,10 @@ rows_of_9(Flat, [Row | Rows]) :-
 %   hint(Row, Col, Value), porque o janus converte listas e átomos para o
 %   Python, mas não termos compostos.
 hint(Board, Result) :-
-    (   solve(Board, Solution)
+    hint(classic, Board, Result).
+
+hint(Variant, Board, Result) :-
+    (   solve(Variant, Board, Solution)
     ->  empty_positions(Board, Empty),
         (   Empty == []
         ->  Result = complete
@@ -354,7 +472,7 @@ empty_positions(Board, Positions) :-
 
 
 /* =========================================================================
-   6. UTILITÁRIOS PARA USO NO TERMINAL
+   7. UTILITÁRIOS PARA USO NO TERMINAL
    ========================================================================= */
 
 %   Um puzzle clássico (da Wikipedia) para experimentar.
@@ -367,6 +485,21 @@ example_puzzle([[5,3,0, 0,7,0, 0,0,0],
                 [0,6,0, 0,0,0, 2,8,0],
                 [0,0,0, 4,1,9, 0,0,5],
                 [0,0,0, 0,8,0, 0,7,9]]).
+
+%   Um puzzle diagonal criado por generate(diagonal, hard, P). Ele tem
+%   solução ÚNICA no Sudoku diagonal, mas MAIS DE UMA no clássico: são as
+%   restrições das diagonais que eliminam as outras. Confira no terminal:
+%       ?- example_diagonal_puzzle(P), count_solutions(diagonal, P, 10, N).
+%       ?- example_diagonal_puzzle(P), count_solutions(classic, P, 10, N).
+example_diagonal_puzzle([[0,3,0, 0,0,4, 0,0,0],
+                         [6,0,0, 0,0,5, 0,9,0],
+                         [7,0,2, 9,0,6, 3,0,4],
+                         [0,9,0, 0,4,0, 0,0,0],
+                         [4,0,0, 0,8,0, 0,2,0],
+                         [0,0,0, 0,2,0, 4,0,0],
+                         [8,0,0, 0,0,0, 0,6,0],
+                         [0,0,0, 0,0,0, 0,0,1],
+                         [1,0,0, 7,0,0, 8,4,3]]).
 
 %   print_grid(+Grid): imprime o tabuleiro de forma legível.
 %   forall(Cond, Ação) executa Ação para cada solução de Cond.

@@ -185,6 +185,11 @@ Quando o tabuleiro não tem solução, `solve` e `hint` respondem com status 422
 e `{"detail": "mensagem"}`. `hint` também responde 422 quando o tabuleiro já
 está completo. O Elm mostra essa mensagem na tela.
 
+As três rotas aceitam também o campo opcional `"variant"`: `"classic"` (o
+padrão) ou `"diagonal"`. No Sudoku diagonal, as duas diagonais principais
+também não repetem números. Exemplo:
+`{"difficulty": "hard", "variant": "diagonal"}`.
+
 ## Entrega
 
 A entrega acontece pelo GitHub Classroom, em duas atividades:

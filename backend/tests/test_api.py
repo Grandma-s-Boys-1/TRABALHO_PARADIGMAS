@@ -81,3 +81,41 @@ def test_hint_on_full_board_with_errors():
     response = client.post("/api/hint", json={"board": board})
     assert response.status_code == 422
     assert "não tem solução" in response.json()["detail"]
+
+
+# --- Sudoku diagonal ------------------------------------------------------
+# As regras ficam no Prolog (testadas em test_sudoku.pl). Aqui conferimos
+# que o campo "variant" chega até lá e que um valor desconhecido é barrado.
+
+
+def diagonals(board: list[list[int]]) -> tuple[list[int], list[int]]:
+    main = [board[i][i] for i in range(9)]
+    anti = [board[i][8 - i] for i in range(9)]
+    return main, anti
+
+
+def test_generate_and_solve_diagonal():
+    puzzle = client.post(
+        "/api/generate", json={"difficulty": "easy", "variant": "diagonal"}
+    ).json()["board"]
+    response = client.post("/api/solve", json={"board": puzzle, "variant": "diagonal"})
+    assert response.status_code == 200
+    for diagonal in diagonals(response.json()["board"]):
+        assert sorted(diagonal) == list(range(1, 10))
+
+
+def test_classic_example_has_no_diagonal_solution():
+    response = client.post("/api/solve", json={"board": EXAMPLE, "variant": "diagonal"})
+    assert response.status_code == 422
+
+
+def test_hint_respects_variant():
+    response = client.post("/api/hint", json={"board": EXAMPLE, "variant": "classic"})
+    assert response.status_code == 200
+    response = client.post("/api/hint", json={"board": EXAMPLE, "variant": "diagonal"})
+    assert response.status_code == 422  # sem solução diagonal, sem dica
+
+
+def test_unknown_variant_is_rejected():
+    response = client.post("/api/solve", json={"board": EXAMPLE, "variant": "killer"})
+    assert response.status_code == 422

@@ -2,6 +2,7 @@ module Sudoku exposing
     ( Board
     , Cell(..)
     , Position
+    , Variant(..)
     , cellAt
     , clearGuesses
     , conflicts
@@ -10,11 +11,12 @@ module Sudoku exposing
     , isComplete
     , isGiven
     , isGuess
+    , isOnDiagonal
     , isRevealed
     , positions
     , removeMarkFromPeers
     , revealSolution
-    , sameBox
+    , sameRegion
     , setCell
     , toLists
     , toggleMark
@@ -84,6 +86,22 @@ devolve um tabuleiro NOVO com a casa alterada.
 -}
 type alias Board =
     Array Cell
+
+
+{-| As regras em jogo. No Sudoku diagonal (ou "Sudoku X"), além de linhas,
+colunas e blocos, as duas diagonais principais também não podem repetir
+números.
+
+Um custom type, e não um `Bool` como `diagonal : Bool`, porque uma variante
+nova (Killer, anti-cavalo...) vira só mais um construtor, e o compilador
+aponta cada `case` que precisa passar a tratá-la. Com um `Bool`, a segunda
+variante já exigiria um segundo `Bool`, e aí `diagonal = True` e
+`killer = True` ao mesmo tempo seria um estado sem sentido, mas possível.
+
+-}
+type Variant
+    = Classic
+    | Diagonal
 
 
 
@@ -237,24 +255,82 @@ sameBox ( r1, c1 ) ( r2, c2 ) =
     r1 // 3 == r2 // 3 && c1 // 3 == c2 // 3
 
 
-{-| Duas posições diferentes "se enxergam" se estão na mesma linha, coluna
-ou bloco. Nessas condições não podem ter o mesmo número.
+{-| Diagonal principal: de cima à esquerda até embaixo à direita.
 -}
-peers : Position -> Position -> Bool
-peers (( r1, c1 ) as p1) (( r2, c2 ) as p2) =
+onMainDiagonal : Position -> Bool
+onMainDiagonal ( row, col ) =
+    row == col
+
+
+{-| Antidiagonal: de cima à direita até embaixo à esquerda. A casa central,
+(4, 4), está nas duas.
+-}
+onAntiDiagonal : Position -> Bool
+onAntiDiagonal ( row, col ) =
+    row + col == 8
+
+
+{-| A casa está numa diagonal que vale como região nesta variante? No
+clássico, as diagonais não têm regra nenhuma, então nenhuma casa está.
+-}
+isOnDiagonal : Variant -> Position -> Bool
+isOnDiagonal variant position =
+    case variant of
+        Classic ->
+            False
+
+        Diagonal ->
+            onMainDiagonal position || onAntiDiagonal position
+
+
+sameDiagonal : Position -> Position -> Bool
+sameDiagonal p1 p2 =
+    (onMainDiagonal p1 && onMainDiagonal p2)
+        || (onAntiDiagonal p1 && onAntiDiagonal p2)
+
+
+{-| Duas posições estão numa mesma REGIÃO, um grupo de 9 casas que não pode
+repetir número? No clássico, as regiões são linhas, colunas e blocos; no
+diagonal, também as duas diagonais.
+
+Tudo o que depende de "quem enxerga quem" passa por aqui: os conflitos, as
+marcações apagadas dos vizinhos e o destaque na tela. Essas funções só
+repassam a variante, sem nenhum `case` sobre ela. Uma variante nova muda
+esta função, e o resto continua igual.
+
+-}
+sameRegion : Variant -> Position -> Position -> Bool
+sameRegion variant (( r1, c1 ) as p1) (( r2, c2 ) as p2) =
     -- `( r1, c1 ) as p1` desestrutura a tupla E dá nome à tupla inteira.
-    p1 /= p2 && (r1 == r2 || c1 == c2 || sameBox p1 p2)
+    let
+        sameExtraRegion =
+            case variant of
+                Classic ->
+                    False
+
+                Diagonal ->
+                    sameDiagonal p1 p2
+    in
+    r1 == r2 || c1 == c2 || sameBox p1 p2 || sameExtraRegion
+
+
+{-| Duas posições diferentes "se enxergam" se estão na mesma região. Nessas
+condições não podem ter o mesmo número.
+-}
+peers : Variant -> Position -> Position -> Bool
+peers variant p1 p2 =
+    p1 /= p2 && sameRegion variant p1 p2
 
 
 {-| Posições que violam as regras: casas com o mesmo número de outra casa na
-mesma linha, coluna ou bloco.
+mesma região (linha, coluna, bloco e, no diagonal, diagonal).
 
 Esta checagem é feita no Elm (e não no Prolog) porque precisa ser instantânea
 a cada tecla. É uma verificação simples, O(81 × 81), que não precisa de busca.
 
 -}
-conflicts : Board -> Set Position
-conflicts board =
+conflicts : Variant -> Board -> Set Position
+conflicts variant board =
     let
         -- `let ... in` define nomes locais. Aqui: lista de (posição, número)
         -- apenas das casas preenchidas. `List.filterMap` aplica a função e
@@ -270,7 +346,7 @@ conflicts board =
                     )
 
         inConflict ( pos, n ) =
-            List.any (\( other, m ) -> n == m && peers pos other) filled
+            List.any (\( other, m ) -> n == m && peers variant pos other) filled
     in
     filled
         |> List.filter inConflict
@@ -280,10 +356,10 @@ conflicts board =
 
 {-| O jogo termina quando todas as casas têm número e não há conflitos.
 -}
-isComplete : Board -> Bool
-isComplete board =
+isComplete : Variant -> Board -> Bool
+isComplete variant board =
     List.all (\cell -> valueOf cell /= Nothing) (Array.toList board)
-        && Set.isEmpty (conflicts board)
+        && Set.isEmpty (conflicts variant board)
 
 
 
@@ -339,13 +415,13 @@ A posição de cada casa é recuperada a partir do índice no Array:
 linha = índice // 9, coluna = resto da divisão por 9.
 
 -}
-removeMarkFromPeers : Position -> Int -> Board -> Board
-removeMarkFromPeers position n board =
+removeMarkFromPeers : Variant -> Position -> Int -> Board -> Board
+removeMarkFromPeers variant position n board =
     Array.indexedMap
         (\index cell ->
             case cell of
                 Marks marks ->
-                    if peers position ( index // 9, modBy 9 index ) then
+                    if peers variant position ( index // 9, modBy 9 index ) then
                         fromMarks (Set.remove n marks)
 
                     else

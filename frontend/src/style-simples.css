@@ -138,6 +138,13 @@
     @apply btn-primary;
   }
 
+  /* Escolha da variante: igual à dificuldade, com a cor secundária, a
+     mesma das diagonais no tabuleiro. */
+  .variant-picker         { @apply join w-full; }
+  .variant-option         { @apply btn join-item flex-1; }
+  .variant-option--active { @apply btn-secondary; }
+  .variant-rule           { @apply text-sm opacity-70; }
+
   .message          { @apply alert w-full text-sm; }
   .message--error   { @apply alert-error; }
   .message--success { @apply alert-success; }
@@ -191,7 +198,9 @@
 
   /* Destaques. Quando duas regras se aplicam à mesma casa, vale a que vem
      DEPOIS no arquivo. Por isso a seleção vem depois da origem: numa casa
-     selecionada, a cor do texto da seleção ganha da cor do número. */
+     selecionada, a cor do texto da seleção ganha da cor do número.
+     As diagonais (Sudoku diagonal) vêm antes dos destaques da seleção. */
+  .cell--diagonal   { @apply bg-secondary/15; }
   .cell--related    { @apply bg-base-200; }
   .cell--same-value { @apply bg-accent/30; }
   .cell--selected   { @apply bg-primary text-primary-content; }

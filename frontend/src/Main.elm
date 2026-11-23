@@ -19,12 +19,12 @@ Não há variáveis globais nem alterações "escondidas" do estado.
 import Api exposing (Difficulty(..))
 import Browser
 import Browser.Events
-import Html exposing (Html, aside, button, div, footer, h1, header, input, label, main_, span, text)
+import Html exposing (Html, aside, button, div, footer, h1, header, input, label, main_, p, span, text)
 import Html.Attributes exposing (attribute, checked, class, classList, disabled, type_, value)
 import Html.Events exposing (onCheck, onClick)
 import Json.Decode as Decode exposing (Decoder)
 import Set exposing (Set)
-import Sudoku exposing (Board, Cell(..), Position)
+import Sudoku exposing (Board, Cell(..), Position, Variant(..))
 
 
 
@@ -64,8 +64,12 @@ type alias Flags =
     }
 
 
+{-| `variant` diz com que regras o `board` está sendo jogado. Os dois só
+mudam juntos, quando chega um puzzle novo (veja `GotPuzzle` no `update`).
+-}
 type alias Model =
     { board : Board
+    , variant : Variant
     , selected : Maybe Position
     , difficulty : Difficulty
     , mode : InputMode
@@ -95,6 +99,7 @@ pedindo um puzzle ao backend.
 init : Flags -> ( Model, Cmd Msg )
 init flags =
     ( { board = Sudoku.empty
+      , variant = Diagonal
       , selected = Nothing
       , difficulty = Medium
       , mode = Numbers
@@ -102,7 +107,7 @@ init flags =
       , loading = True
       , error = Nothing
       }
-    , Api.generate Medium GotPuzzle
+    , Api.generate Diagonal Medium (GotPuzzle Diagonal)
     )
 
 
@@ -117,8 +122,8 @@ mensagens é o runtime do Elm, quando uma resposta HTTP chega.
 
 -}
 type Msg
-    = NewGame Difficulty
-    | GotPuzzle (Result String Board)
+    = NewGame Variant Difficulty
+    | GotPuzzle Variant (Result String Board)
     | CellClicked Position
     | NumberPressed Int
     | ErasePressed
@@ -136,21 +141,30 @@ type Msg
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NewGame difficulty ->
+        NewGame variant difficulty ->
             -- `{ model | campo = valor }` cria uma CÓPIA do record com alguns
             -- campos alterados. O `model` original não muda.
+            --
+            -- A variante NÃO muda aqui. Ela vai "guardada" na mensagem de
+            -- resposta: `GotPuzzle variant` é uma aplicação parcial, uma
+            -- função que ainda espera o `Result`. Se mudássemos a variante
+            -- agora, o tabuleiro antigo seria julgado pelas regras novas
+            -- enquanto o Prolog trabalha, e continuaria assim se o pedido
+            -- falhasse.
             ( { model | difficulty = difficulty, loading = True, error = Nothing }
-            , Api.generate difficulty GotPuzzle
+            , Api.generate variant difficulty (GotPuzzle variant)
             )
 
-        GotPuzzle (Ok board) ->
+        GotPuzzle variant (Ok board) ->
             -- Podemos casar padrões "por dentro": aqui tratamos só o caso
             -- `Ok`, e o caso `Err` fica num ramo separado abaixo.
-            ( { model | board = board, selected = Nothing, loading = False }
+            -- Tabuleiro e variante chegam na MESMA mensagem e entram juntos
+            -- no Model.
+            ( { model | board = board, variant = variant, selected = Nothing, loading = False }
             , Cmd.none
             )
 
-        GotPuzzle (Err error) ->
+        GotPuzzle _ (Err error) ->
             ( failed error model, Cmd.none )
 
         CellClicked position ->
@@ -159,7 +173,7 @@ update msg model =
         NumberPressed n ->
             case model.mode of
                 Numbers ->
-                    ( updateSelected (placeNumber (Guess n) n) model, Cmd.none )
+                    ( updateSelected (placeNumber model.variant (Guess n) n) model, Cmd.none )
 
                 CornerMarks ->
                     ( updateSelected (\position -> Sudoku.toggleMark position n) model
@@ -201,13 +215,13 @@ update msg model =
 
         HintRequested ->
             ( { model | loading = True, error = Nothing }
-            , Api.hint model.board GotHint
+            , Api.hint model.variant model.board GotHint
             )
 
         GotHint (Ok { row, col, value }) ->
             -- Desestruturação de record: extrai os campos direto no padrão.
             ( { model
-                | board = placeNumber (Revealed value) value ( row, col ) model.board
+                | board = placeNumber model.variant (Revealed value) value ( row, col ) model.board
                 , selected = Just ( row, col )
                 , loading = False
               }
@@ -221,7 +235,7 @@ update msg model =
             -- Mandamos só as pistas originais: se o jogador errou algo, isso
             -- não deve impedir o Prolog de achar a solução.
             ( { model | loading = True, error = Nothing }
-            , Api.solve (Sudoku.clearGuesses model.board) GotSolution
+            , Api.solve model.variant (Sudoku.clearGuesses model.board) GotSolution
             )
 
         GotSolution (Ok solution) ->
@@ -272,21 +286,24 @@ vizinhos. (Sem esse `if`, `setCell` recusaria a alteração, mas
 `removeMarkFromPeers` rodaria mesmo assim e apagaria marcações à toa.)
 
 Repare que a assinatura termina em `Position -> Board -> Board`. Por isso
-`placeNumber (Guess n) n` (só com dois argumentos) já é uma função do tipo
-que `updateSelected` espera. Isso é APLICAÇÃO PARCIAL: em Elm, toda função
-de vários argumentos pode receber só os primeiros e devolver uma função que
-espera o resto.
+`placeNumber model.variant (Guess n) n` (só com três argumentos) já é uma
+função do tipo que `updateSelected` espera. Isso é APLICAÇÃO PARCIAL: em Elm,
+toda função de vários argumentos pode receber só os primeiros e devolver uma
+função que espera o resto.
+
+A variante decide quem são os vizinhos: no diagonal, colocar um número numa
+diagonal também apaga essa marcação do resto da diagonal.
 
 -}
-placeNumber : Cell -> Int -> Position -> Board -> Board
-placeNumber cell n position board =
+placeNumber : Variant -> Cell -> Int -> Position -> Board -> Board
+placeNumber variant cell n position board =
     if Sudoku.isGiven (Sudoku.cellAt position board) then
         board
 
     else
         board
             |> Sudoku.setCell position cell
-            |> Sudoku.removeMarkFromPeers position n
+            |> Sudoku.removeMarkFromPeers variant position n
 
 
 
@@ -400,7 +417,10 @@ view model =
             [ div [ class "app-container game" ]
                 [ viewBoard model
                 , aside [ class "side-panel" ]
-                    [ span [ class "panel-label" ] [ text "Novo jogo" ]
+                    [ span [ class "panel-label" ] [ text "Regras" ]
+                    , viewVariant model
+                    , p [ class "variant-rule" ] [ text (variantRule model.variant) ]
+                    , span [ class "panel-label" ] [ text "Novo jogo" ]
                     , viewDifficulty model
                     , div [ class "message-area" ] [ viewMessages model ]
                     , span [ class "panel-label" ] [ text "Números" ]
@@ -458,6 +478,45 @@ kbd =
     Html.node "kbd"
 
 
+{-| Escolha das regras. Trocar de variante começa um jogo novo, na
+dificuldade atual. O botão ativo é o da variante do jogo que está NA TELA,
+que só muda quando o puzzle novo chega.
+-}
+viewVariant : Model -> Html Msg
+viewVariant model =
+    let
+        option variant =
+            button
+                [ class "variant-option"
+                , classList [ ( "variant-option--active", variant == model.variant ) ]
+                , disabled model.loading
+                , onClick (NewGame variant model.difficulty)
+                ]
+                [ text (variantLabel variant) ]
+    in
+    div [ class "variant-picker" ] (List.map option [ Classic, Diagonal ])
+
+
+variantLabel : Variant -> String
+variantLabel variant =
+    case variant of
+        Classic ->
+            "Clássico"
+
+        Diagonal ->
+            "Diagonal"
+
+
+variantRule : Variant -> String
+variantRule variant =
+    case variant of
+        Classic ->
+            "Linhas, colunas e blocos sem números repetidos."
+
+        Diagonal ->
+            "Como no clássico, e as duas diagonais destacadas também não repetem números."
+
+
 viewDifficulty : Model -> Html Msg
 viewDifficulty model =
     let
@@ -466,7 +525,7 @@ viewDifficulty model =
                 [ class "difficulty-option"
                 , classList [ ( "difficulty-option--active", difficulty == model.difficulty ) ]
                 , disabled model.loading
-                , onClick (NewGame difficulty)
+                , onClick (NewGame model.variant difficulty)
                 ]
                 [ text (Api.difficultyLabel difficulty) ]
     in
@@ -491,7 +550,7 @@ viewMessages model =
                 ]
 
         ( Nothing, False ) ->
-            if Sudoku.isComplete model.board then
+            if Sudoku.isComplete model.variant model.board then
                 div [ class "message message--success" ]
                     [ text (completionMessage model.board) ]
 
@@ -517,11 +576,11 @@ viewBoard : Model -> Html Msg
 viewBoard model =
     let
         conflicts =
-            Sudoku.conflicts model.board
+            Sudoku.conflicts model.variant model.board
     in
     div
         [ class "board"
-        , classList [ ( "board--solved", Sudoku.isComplete model.board ) ]
+        , classList [ ( "board--solved", Sudoku.isComplete model.variant model.board ) ]
         ]
         (List.map (viewCell model conflicts) Sudoku.positions)
 
@@ -535,11 +594,12 @@ viewCell model conflicts (( row, col ) as position) =
         value =
             Sudoku.valueOf cell
 
-        -- A casa está na mesma linha, coluna ou bloco da selecionada?
+        -- A casa está numa mesma região da selecionada (linha, coluna,
+        -- bloco e, no diagonal, diagonal)?
         isRelated =
             case model.selected of
-                Just (( selRow, selCol ) as sel) ->
-                    selRow == row || selCol == col || Sudoku.sameBox sel position
+                Just sel ->
+                    Sudoku.sameRegion model.variant sel position
 
                 Nothing ->
                     False
@@ -554,6 +614,7 @@ viewCell model conflicts (( row, col ) as position) =
         [ class "cell"
         , classList
             [ ( "cell--selected", model.selected == Just position )
+            , ( "cell--diagonal", Sudoku.isOnDiagonal model.variant position )
             , ( "cell--related", isRelated )
             , ( "cell--same-value", value /= Nothing && value == selectedValue )
             , ( "cell--conflict", Set.member position conflicts )
@@ -645,7 +706,7 @@ viewActions model =
         -- Com o tabuleiro completo não há o que revelar: os botões de ajuda
         -- ficam desativados, e a mensagem de parabéns continua na tela.
         nothingToReveal =
-            model.loading || Sudoku.isComplete model.board
+            model.loading || Sudoku.isComplete model.variant model.board
     in
     div [ class "actions" ]
         [ button [ class "action-button action-button--hint", disabled nothingToReveal, onClick HintRequested ] [ text "Dica" ]

@@ -258,6 +258,7 @@
   --cell-bg: transparent;
   --cell-hover: color-mix(in oklch, var(--color-primary) 10%, transparent);
   --cell-related: color-mix(in oklch, var(--color-primary) 7%, transparent);
+  --cell-diagonal: color-mix(in oklch, var(--color-secondary) 12%, transparent);  /* Sudoku diagonal */
   --cell-same-value: color-mix(in oklch, var(--color-accent) 35%, transparent);
   --cell-selected: var(--color-primary);
   --cell-conflict: var(--color-error);
@@ -475,6 +476,26 @@
     }
   }
 
+  /* ---------- Variante (regras) ----------
+     O mesmo visual da dificuldade, mas com a cor secundária: a mesma que
+     pinta as diagonais no tabuleiro (veja `.cell--diagonal`). */
+
+  .variant-picker {
+    @apply join w-full;
+  }
+
+  .variant-option {
+    @apply btn join-item flex-1;
+
+    &.variant-option--active {
+      @apply btn-secondary;
+    }
+  }
+
+  .variant-rule {
+    @apply text-sm opacity-70;
+  }
+
   /* ---------- Mensagens ---------- */
 
   .message {
@@ -585,7 +606,10 @@
   }
 
   /* Modificadores de destaque. A ORDEM importa: com a mesma especificidade,
-     a regra que vem depois vence. Por isso "selecionada" vem por último. */
+     a regra que vem depois vence. Por isso "selecionada" vem por último.
+     As casas das diagonais (no Sudoku diagonal) vêm primeiro: qualquer
+     destaque da seleção ganha delas. */
+  .cell--diagonal   { --cell-bg: var(--cell-diagonal); }
   .cell--related    { --cell-bg: var(--cell-related); }
   .cell--same-value { --cell-bg: var(--cell-same-value); }
 

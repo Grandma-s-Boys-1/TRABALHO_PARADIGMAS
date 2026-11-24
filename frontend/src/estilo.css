@@ -1,0 +1,148 @@
+:root {
+  --casa: 3rem;
+  --fundo: #f4f1ea;
+  --superficie: #ffffff;
+  --texto: #1f2328;
+  --suave: #5c6470;
+  --borda: #c9c2b4;
+  --parede: #4a4038;
+  --chao: #e8dfcf;
+  --alvo: #c98a1a;
+  --caixa: #8b5a2b;
+  --jogador: #1f5fa8;
+  --pista: #dedad2;
+  --ligada: #fff4d6;
+  --erro: #b3261e;
+  --erro-fundo: #fde7e5;
+  --sucesso: #1d6b3a;
+  --sucesso-fundo: #e2f4e8;
+  --info-fundo: #e7eef8;
+  --destaque: #7a3fc0;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font-family: system-ui, sans-serif;
+}
+.app { max-width: 64rem; margin: 0 auto; padding: 1rem; }
+.cabecalho { display: flex; align-items: baseline; gap: 0.75rem; }
+.titulo { margin: 0; font-size: 1.6rem; }
+.subtitulo, .rodape, .legenda { color: var(--suave); font-size: 0.9rem; }
+
+.fases, .setas, .teclas, .acoes, .diagnostico, .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+
+.botao {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--borda);
+  border-radius: 0.4rem;
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+  cursor: pointer;
+}
+
+.botao:disabled { opacity: 0.45; cursor: default; }
+.botao--ativo { border-color: var(--jogador); background: var(--info-fundo); font-weight: 700; }
+
+.partida { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.5rem; }
+.tabuleiros { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 1.5rem; }
+.painel { flex: 1 1 18rem; min-width: 16rem; }
+.painel-titulo { width: 100%; margin: 0.4rem 0 0; font-size: 1rem; }
+
+.armazem { display: grid; gap: 2px; }
+
+.casa {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--casa);
+  height: var(--casa);
+  border-radius: 0.25rem;
+  background: var(--chao);
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.casa--parede { background: var(--parede); }
+.casa--alvo { box-shadow: inset 0 0 0 3px var(--alvo); }
+.casa--caixa { background: var(--caixa); color: #ffffff; }
+.casa--caixa.casa--alvo { box-shadow: inset 0 0 0 4px var(--alvo); }
+.casa--jogador { color: var(--jogador); }
+
+.casa-letra, .celula-letra {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--alvo);
+}
+
+.sudoku {
+  display: grid;
+  grid-template-columns: repeat(4, var(--casa));
+  border: 3px solid var(--texto);
+}
+
+.celula {
+  position: relative;
+  width: var(--casa);
+  height: var(--casa);
+  border: 1px solid var(--borda);
+  background: var(--superficie);
+  color: var(--jogador);
+  font: inherit;
+  font-size: 1.3rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.celula:nth-child(4n + 2) { border-right: 3px solid var(--texto); }
+.celula:nth-child(n + 5):nth-child(-n + 8) { border-bottom: 3px solid var(--texto); }
+.celula--pista { background: var(--pista); color: var(--texto); }
+.celula--ligada { border: 2px dashed var(--alvo); background: var(--ligada); color: var(--caixa); }
+.celula--selecionada { outline: 3px solid var(--jogador); outline-offset: -3px; }
+.celula--conflito { background: var(--erro-fundo); color: var(--erro); }
+
+.destaque { outline: 3px solid var(--destaque); outline-offset: -3px; }
+.destaque--passo, .destaque--alcance { outline-style: dashed; }
+.destaque--alerta, .destaque--conflito, .destaque--revisar { outline-color: var(--erro); }
+.destaque--destino, .destaque--opcao, .destaque--dica { outline-color: var(--sucesso); }
+
+.mensagem {
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.4rem;
+  background: var(--info-fundo);
+}
+
+.mensagem--erro, .mensagem--alerta { background: var(--erro-fundo); color: var(--erro); }
+.mensagem--sucesso { background: var(--sucesso-fundo); color: var(--sucesso); font-weight: 700; }
+
+.ajuda, .modulo {
+  margin: 0.6rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--borda);
+  border-radius: 0.4rem;
+  background: var(--superficie);
+}
+
+.ajuda-texto, .modulo-titulo { margin: 0 0 0.4rem; font-weight: 700; }
+.chip { padding: 0.2rem 0.6rem; border: 1px solid var(--borda); border-radius: 1rem; }
+.chip--ativo { border-color: var(--sucesso); background: var(--sucesso-fundo); }
+.chip--inativo { color: var(--suave); text-decoration: line-through; }
+.lista { margin: 0; padding-left: 1.2rem; }
+
+@media (max-width: 40rem) {
+  :root { --casa: 2.6rem; }
+  .tabuleiros { flex-direction: column; }
+}

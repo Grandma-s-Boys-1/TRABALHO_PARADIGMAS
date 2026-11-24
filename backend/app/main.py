@@ -1,14 +1,3 @@
-"""API HTTP do Sudoku.
-
-Esta camada é só "cola": recebe JSON, valida o formato com Pydantic, chama o
-Prolog (via app/prolog.py) e devolve JSON. Nenhuma regra do jogo mora aqui.
-
-Rodar em modo de desenvolvimento (recarrega ao salvar):
-    uv run fastapi dev app/main.py
-
-Documentação interativa gerada automaticamente: http://localhost:8000/docs
-"""
-
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException
@@ -16,65 +5,116 @@ from pydantic import BaseModel, Field
 
 from app import prolog
 
-app = FastAPI(title="Sudoku (Prolog + Elm)")
+app = FastAPI(title="Sokoban Sudoku (Prolog + Elm)")
 
-# Uma linha tem exatamente 9 inteiros de 0 a 9; um tabuleiro tem 9 linhas.
-# O Pydantic rejeita automaticamente (erro 422) qualquer coisa fora disso.
-Cell = Annotated[int, Field(ge=0, le=9)]
-Row = Annotated[list[Cell], Field(min_length=9, max_length=9)]
-Grid = Annotated[list[Row], Field(min_length=9, max_length=9)]
-
-# As variantes que o Prolog conhece (fatos variant/1 em sudoku.pl). O campo é
-# opcional: quem não manda a variante joga o clássico.
-Variant = Literal["classic", "diagonal"]
+Indice = Annotated[int, Field(ge=1, le=9)]
+Digito = Annotated[int, Field(ge=0, le=4)]
+Linha = Annotated[list[Digito], Field(min_length=4, max_length=4)]
+Grade = Annotated[list[Linha], Field(min_length=4, max_length=4)]
+Direcao = Literal["cima", "baixo", "esquerda", "direita"]
 
 
-class GenerateRequest(BaseModel):
-    difficulty: Literal["easy", "medium", "hard"] = "medium"
-    variant: Variant = "classic"
+class Posicao(BaseModel):
+    linha: Indice
+    coluna: Indice
 
 
-class BoardRequest(BaseModel):
-    board: Grid
-    variant: Variant = "classic"
+class Caixa(Posicao):
+    numero: Annotated[int, Field(ge=1, le=4)]
 
 
-class BoardResponse(BaseModel):
-    board: Grid
+class Estado(BaseModel):
+    jogador: Posicao
+    caixas: Annotated[list[Caixa], Field(max_length=4)]
+    entradas: Grade
 
 
-class HintResponse(BaseModel):
-    row: int
-    col: int
-    value: int
+class Pedido(BaseModel):
+    fase: str
+    estado: Estado
 
 
-# Mensagens que o Elm mostra na tela quando a resposta é 422.
-NO_SOLUTION = "Este tabuleiro não tem solução. Confira os números preenchidos."
-BOARD_COMPLETE = "O tabuleiro já está completo."
+class PedidoJogada(Pedido):
+    direcao: Direcao
 
 
-@app.post("/api/generate")
-def generate(request: GenerateRequest) -> BoardResponse:
-    return BoardResponse(board=prolog.generate(request.difficulty, request.variant))
+class Padrao(BaseModel):
+    tipo: Literal["padrao"]
 
 
-@app.post("/api/solve")
-def solve(request: BoardRequest) -> BoardResponse:
+class Casa(BaseModel):
+    tipo: Literal["casa"]
+    linha: Indice
+    coluna: Indice
+
+
+class Sentido(BaseModel):
+    tipo: Literal["direcao"]
+    direcao: Direcao
+
+
+class PedidoDiagnostico(Pedido):
+    consulta: Annotated[Padrao | Casa | Sentido, Field(discriminator="tipo")]
+
+
+FASE_DESCONHECIDA = "Fase desconhecida."
+ESTADO_INVALIDO = "Estado invalido para esta fase."
+SEM_DIAGNOSTICO = "Esta fase nao tem diagnostico."
+
+
+def validar(pedido: Pedido) -> None:
     try:
-        return BoardResponse(board=prolog.solve(request.board, request.variant))
-    except prolog.NoSolution:
-        # `from None` diz que a HTTPException SUBSTITUI a exceção original,
-        # em vez de ser "causada" por ela; o traceback fica mais limpo.
-        raise HTTPException(status_code=422, detail=NO_SOLUTION) from None
+        prolog.validar(pedido.fase, pedido.estado)
+    except prolog.FaseDesconhecida:
+        raise HTTPException(status_code=404, detail=FASE_DESCONHECIDA) from None
+    except prolog.EstadoInvalido:
+        raise HTTPException(status_code=422, detail=ESTADO_INVALIDO) from None
 
 
-@app.post("/api/hint")
-def hint(request: BoardRequest) -> HintResponse:
+def consulta(pedido: Padrao | Casa | Sentido) -> list:
+    match pedido:
+        case Casa(linha=linha, coluna=coluna):
+            return ["casa", linha, coluna]
+        case Sentido(direcao=direcao):
+            return ["direcao", direcao]
+    return ["padrao"]
+
+
+@app.get("/api/fases")
+def listar_fases() -> list[dict]:
+    return prolog.fases()
+
+
+@app.get("/api/fases/{ident}")
+def obter_fase(ident: str) -> dict:
     try:
-        row, col, value = prolog.hint(request.board, request.variant)
-    except prolog.NoSolution:
-        raise HTTPException(status_code=422, detail=NO_SOLUTION) from None
-    except prolog.BoardComplete:
-        raise HTTPException(status_code=422, detail=BOARD_COMPLETE) from None
-    return HintResponse(row=row, col=col, value=value)
+        return prolog.fase(ident)
+    except prolog.FaseDesconhecida:
+        raise HTTPException(status_code=404, detail=FASE_DESCONHECIDA) from None
+
+
+@app.post("/api/jogada")
+def jogada(pedido: PedidoJogada) -> dict:
+    validar(pedido)
+    return prolog.jogada(pedido.fase, pedido.estado, pedido.direcao)
+
+
+@app.post("/api/situacao")
+def situacao(pedido: Pedido) -> dict:
+    validar(pedido)
+    return {"situacao": prolog.situacao(pedido.fase, pedido.estado)}
+
+
+@app.post("/api/dica")
+def dica(pedido: Pedido) -> dict:
+    validar(pedido)
+    return prolog.dica(pedido.fase, pedido.estado)
+
+
+@app.post("/api/diagnostico")
+def diagnostico(pedido: PedidoDiagnostico) -> dict:
+    validar(pedido)
+    try:
+        return prolog.diagnostico(pedido.fase, pedido.estado, consulta(pedido.consulta))
+    except prolog.SemDiagnostico:
+        raise HTTPException(status_code=404, detail=SEM_DIAGNOSTICO) from None

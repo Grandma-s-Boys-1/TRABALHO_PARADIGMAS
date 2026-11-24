@@ -1,30 +1,51 @@
-# Atalhos para as tarefas mais comuns. Uso: `make <alvo>`.
-#
-# O `make` só interpreta as linhas de receita (indentadas com TAB), cada uma
-# executada num shell separado; por isso usamos `cd pasta && comando`.
+.PHONY: install dev backend frontend test test-prolog test-backend test-frontend
+.PHONY: formato build validar ascii
 
-.PHONY: install dev backend frontend test test-prolog test-backend validar
+TESTES_PROLOG = $(wildcard backend/prolog/test_*.pl backend/prolog/fases/test_*.pl)
 
-install:            ## instala as dependências do backend e do frontend
+ARQUIVOS = $(wildcard Makefile scripts/verificar_ascii.py backend/pyproject.toml \
+	backend/app/*.py backend/tests/*.py backend/prolog/*.pl backend/prolog/fases/*.pl \
+	frontend/index.html frontend/package.json frontend/elm.json frontend/vite.config.js \
+	frontend/src/*.js frontend/src/*.css frontend/src/*.elm frontend/src/Fases/*.elm \
+	frontend/tests/*.elm frontend/tests/Fases/*.elm)
+
+install:
 	cd backend && uv sync
 	cd frontend && npm install
 
-dev:                ## sobe backend e frontend juntos (Ctrl+C encerra ambos)
+dev:
 	$(MAKE) -j2 backend frontend
 
-backend:            ## só o backend: http://localhost:8000/docs
+backend:
 	cd backend && uv run fastapi dev app/main.py
 
-frontend:           ## só o frontend: http://localhost:5173
+frontend:
 	cd frontend && npm run dev
 
-test: test-prolog test-backend
+test: test-prolog test-backend test-frontend
 
 test-prolog:
-	swipl -g run_tests -t halt backend/prolog/test_sudoku.pl
+	@falhas=0; \
+	for arquivo in $(TESTES_PROLOG); do \
+		echo "== $$arquivo"; \
+		swipl -g run_tests -t halt $$arquivo || falhas=1; \
+	done; \
+	exit $$falhas
 
 test-backend:
 	cd backend && uv run pytest
 
-validar:            ## confere a forma do RELATORIO.md e das avaliações 360
+test-frontend:
+	cd frontend && npx elm-test
+
+formato:
+	cd frontend && npx elm-format --validate src tests
+
+build:
+	cd frontend && npm run build
+
+validar:
 	uv run scripts/validar_entrega.py
+
+ascii:
+	uv run scripts/verificar_ascii.py $(ARQUIVOS)

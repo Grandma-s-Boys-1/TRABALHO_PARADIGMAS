@@ -1,83 +1,139 @@
-"""Ponte entre Python e Prolog usando a biblioteca janus.
-
-janus (pacote `janus-swi`) embute o SWI-Prolog dentro do processo Python.
-Não há servidor Prolog separado nem troca de mensagens: chamamos predicados
-diretamente e recebemos as respostas como dicionários Python.
-
-Conversão automática de tipos (Python -> Prolog):
-    int          -> inteiro
-    str          -> string  (use janus.Term / átomos com cuidado, veja abaixo)
-    list         -> lista
-    dict         -> dict do SWI-Prolog
-
-Para mais detalhes: https://www.swi-prolog.org/pldoc/man?section=janus
-
-Este é o ÚNICO arquivo do projeto que conhece o janus. O resto do backend
-só chama as funções abaixo.
-"""
-
 from pathlib import Path
 
 import janus_swi as janus
 
-Grid = list[list[int]]
-
-PROLOG_FILE = Path(__file__).parent.parent / "prolog" / "sudoku.pl"
-
-# consult/1 carrega o arquivo .pl, como `?- [sudoku].` no terminal do swipl.
-janus.consult(str(PROLOG_FILE))
+janus.consult(str(Path(__file__).parent.parent / "prolog" / "api.pl"))
 
 
-class NoSolution(Exception):
-    """O tabuleiro enviado não tem solução."""
+class FaseDesconhecida(Exception):
+    pass
 
 
-class BoardComplete(Exception):
-    """O tabuleiro não tem casas vazias: não há dica para dar."""
+class EstadoInvalido(Exception):
+    pass
 
 
-def solve(puzzle: Grid, variant: str = "classic") -> Grid:
-    # query_once executa a consulta e devolve um dict com as variáveis da
-    # consulta (em maiúsculas, como no Prolog) e a chave 'truth', que diz se
-    # a consulta teve sucesso.
-    # A variante chega como string e vira átomo (classic, diagonal) do lado
-    # Prolog, com atom_string/2, como a dificuldade em generate abaixo.
-    result = janus.query_once(
-        "atom_string(V, Variant), sudoku:solve(V, Puzzle, Solution)",
-        {"Variant": variant, "Puzzle": puzzle},
+class SemDiagnostico(Exception):
+    pass
+
+
+def posicao(par):
+    linha, coluna = par
+    return {"linha": linha, "coluna": coluna}
+
+
+def caixa(par):
+    numero, (linha, coluna) = par
+    return {"numero": numero, "linha": linha, "coluna": coluna}
+
+
+def letra(par):
+    nome, (linha, coluna) = par
+    return {"letra": nome, "linha": linha, "coluna": coluna}
+
+
+def estado_json(jogador, caixas, entradas):
+    return {
+        "jogador": posicao(jogador),
+        "caixas": [caixa(c) for c in caixas],
+        "entradas": entradas,
+    }
+
+
+def sudoku_json(sudoku):
+    if not sudoku:
+        return None
+    pistas, ligacoes = sudoku
+    return {"pistas": pistas, "ligacoes": [letra(l) for l in ligacoes]}
+
+
+def ajuda_json(resultado):
+    return {
+        "texto": resultado["Mensagem"],
+        "destaques": [
+            {"tabuleiro": t, "linha": l, "coluna": c, "marca": m}
+            for t, l, c, m in resultado["Destaques"]
+        ],
+        "dados": dict(resultado["Dados"]),
+    }
+
+
+def entrada(fase, estado):
+    return {
+        "Fase": fase,
+        "J": (estado.jogador.linha, estado.jogador.coluna),
+        "Cs": [(c.numero, (c.linha, c.coluna)) for c in estado.caixas],
+        "E": estado.entradas,
+    }
+
+
+def fases():
+    resultado = janus.query_once("api:listar(Lista)")
+    return [
+        {"id": ident, "nome": nome, "regra": regra}
+        for ident, nome, regra in resultado["Lista"]
+    ]
+
+
+def fase(ident):
+    resultado = janus.query_once(
+        "api:dados(Fase, Nome, Dimensoes, Paredes, Alvos, Sudoku, Inicio)",
+        {"Fase": ident},
     )
-    if not result["truth"]:
-        raise NoSolution
-    return result["Solution"]
+    if not resultado["truth"]:
+        raise FaseDesconhecida
+    linhas, colunas = resultado["Dimensoes"]
+    return {
+        "id": ident,
+        "nome": resultado["Nome"],
+        "armazem": {
+            "linhas": linhas,
+            "colunas": colunas,
+            "paredes": [posicao(p) for p in resultado["Paredes"]],
+            "alvos": [letra(a) for a in resultado["Alvos"]],
+        },
+        "sudoku": sudoku_json(resultado["Sudoku"]),
+        "inicio": estado_json(*resultado["Inicio"]),
+    }
 
 
-def generate(difficulty: str, variant: str = "classic") -> Grid:
-    # Strings do Python viram strings do Prolog, mas generate/3 espera
-    # ÁTOMOS (easy, medium, hard; classic, diagonal). atom_string/2 faz a
-    # conversão do lado Prolog.
-    result = janus.query_once(
-        "atom_string(V, Variant), atom_string(D, Name), sudoku:generate(V, D, Puzzle)",
-        {"Variant": variant, "Name": difficulty},
+def validar(fase, estado):
+    if not janus.query_once("api:existe(Fase)", {"Fase": fase})["truth"]:
+        raise FaseDesconhecida
+    if not janus.query_once("api:aceitar(Fase, J, Cs, E)", entrada(fase, estado))["truth"]:
+        raise EstadoInvalido
+
+
+def jogada(fase, estado, direcao):
+    resultado = janus.query_once(
+        "api:mover(Fase, J, Cs, E, Sentido, J1, Cs1, Movimento, Situacao)",
+        entrada(fase, estado) | {"Sentido": direcao},
     )
-    return result["Puzzle"]
+    return {
+        "estado": estado_json(resultado["J1"], resultado["Cs1"], estado.entradas),
+        "movimento": resultado["Movimento"],
+        "situacao": resultado["Situacao"],
+    }
 
 
-def hint(board: Grid, variant: str = "classic") -> tuple[int, int, int]:
-    result = janus.query_once(
-        "atom_string(V, Variant), sudoku:hint(V, Board, Result)",
-        {"Variant": variant, "Board": board},
-    )["Result"]
-    # hint/2 sempre tem sucesso e devolve, em Result, uma lista [Linha,
-    # Coluna, Valor] ou um dos átomos `complete` e `unsolvable` (átomos
-    # chegam ao Python como strings). Quem decidiu o que aconteceu foi o
-    # Prolog; aqui só traduzimos cada caso. O `match` do Python escolhe o
-    # ramo pela FORMA do valor, parecido com o casamento de padrões do
-    # Prolog e do Elm.
-    match result:
-        case "complete":
-            raise BoardComplete
-        case "unsolvable":
-            raise NoSolution
-        case [row, col, value]:
-            return row, col, value
-    raise ValueError(f"resultado inesperado de hint/2: {result!r}")
+def situacao(fase, estado):
+    resultado = janus.query_once("api:avaliar(Fase, J, Cs, E, Situacao)", entrada(fase, estado))
+    return resultado["Situacao"]
+
+
+def dica(fase, estado):
+    resultado = janus.query_once(
+        "api:pedir_dica(Fase, J, Cs, E, Mensagem, Destaques, Dados)",
+        entrada(fase, estado),
+    )
+    return ajuda_json(resultado)
+
+
+def diagnostico(fase, estado, consulta):
+    resultado = janus.query_once(
+        "api:pedir_diagnostico(Fase, J, Cs, E, Consulta, Mensagem, Destaques, Dados)",
+        entrada(fase, estado) | {"Consulta": consulta},
+    )
+    if not resultado["truth"]:
+        raise SemDiagnostico
+    return ajuda_json(resultado)

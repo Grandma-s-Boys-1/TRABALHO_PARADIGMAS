@@ -1,206 +1,344 @@
 module Api exposing
-    ( Difficulty(..)
-    , Hint
-    , difficultyLabel
-    , generate
-    , hint
-    , solve
+    ( Movimento(..)
+    , Resposta
+    , ResumoFase
+    , ajudaDecoder
+    , carregarFase
+    , carregarFases
+    , enviarJogada
+    , faseDecoder
+    , pedirDiagnostico
+    , pedirDica
+    , pedirSituacao
+    , respostaDecoder
     )
 
-{-| Comunicação com o backend (FastAPI + Prolog).
-
-Em Elm, uma requisição HTTP não "acontece" quando chamamos uma função. As
-funções deste módulo devolvem um `Cmd msg`: uma DESCRIÇÃO do efeito que
-queremos. Quem executa o efeito é o runtime do Elm; quando a resposta chega,
-ele chama nosso `update` com a mensagem que indicamos (por exemplo,
-`GotPuzzle resultado`). É assim que o Elm mantém todas as funções puras.
-
-As URLs começam com `/api/...`. Em desenvolvimento, o Vite repassa essas
-requisições para o backend em <http://localhost:8000> (veja vite.config.js).
-
--}
-
+import Ajuda exposing (Ajuda, Consulta(..), Destaque, Tabuleiro(..))
+import Dict exposing (Dict)
 import Http
+import Jogo exposing (Direcao, Estado, Fase, Posicao, Regra(..), Situacao(..))
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Sudoku exposing (Board, Variant(..))
 
 
-type Difficulty
-    = Easy
-    | Medium
-    | Hard
-
-
-difficultyLabel : Difficulty -> String
-difficultyLabel difficulty =
-    case difficulty of
-        Easy ->
-            "Fácil"
-
-        Medium ->
-            "Médio"
-
-        Hard ->
-            "Difícil"
-
-
-{-| Nome usado pela API (e pelo Prolog: são os átomos easy/medium/hard).
--}
-difficultyToString : Difficulty -> String
-difficultyToString difficulty =
-    case difficulty of
-        Easy ->
-            "easy"
-
-        Medium ->
-            "medium"
-
-        Hard ->
-            "hard"
-
-
-{-| Nome da variante na API e no Prolog (os átomos dos fatos variant/1).
--}
-variantToString : Variant -> String
-variantToString variant =
-    case variant of
-        Classic ->
-            "classic"
-
-        Diagonal ->
-            "diagonal"
-
-
-{-| Um _record_ (registro): um conjunto de campos com nome. O `type alias`
-também cria automaticamente uma função construtora `Hint : Int -> Int -> Int
--> Hint`, que usamos no decoder abaixo.
--}
-type alias Hint =
-    { row : Int
-    , col : Int
-    , value : Int
+type alias ResumoFase =
+    { id : String
+    , nome : String
     }
 
 
-
--- REQUISIÇÕES
---
--- Todas recebem a variante em jogo, porque é o Prolog quem aplica as regras,
--- e uma função `toMsg` que diz como embrulhar o resultado numa mensagem.
--- `Result String a` é: ou `Ok valor`, ou `Err mensagemDeErro`.
+type Movimento
+    = Caminhou
+    | Empurrou
+    | Bloqueado
 
 
-generate : Variant -> Difficulty -> (Result String Board -> msg) -> Cmd msg
-generate variant difficulty toMsg =
-    Http.post
-        { url = "/api/generate"
-        , body =
-            Http.jsonBody
-                (Encode.object
-                    [ ( "difficulty", Encode.string (difficultyToString difficulty) )
-                    , ( "variant", Encode.string (variantToString variant) )
-                    ]
-                )
-        , expect = expectJson toMsg boardDecoder
+type alias Resposta =
+    { estado : Estado
+    , movimento : Movimento
+    , situacao : Situacao
+    }
+
+
+carregarFases : (Result String (List ResumoFase) -> msg) -> Cmd msg
+carregarFases aoReceber =
+    Http.get
+        { url = "/api/fases"
+        , expect = esperar aoReceber (Decode.list resumoDecoder)
         }
 
 
-solve : Variant -> Board -> (Result String Board -> msg) -> Cmd msg
-solve variant board toMsg =
-    Http.post
-        { url = "/api/solve"
-        , body = Http.jsonBody (encodeBoard variant board)
-        , expect = expectJson toMsg boardDecoder
+carregarFase : String -> (Result String Fase -> msg) -> Cmd msg
+carregarFase ident aoReceber =
+    Http.get
+        { url = "/api/fases/" ++ ident
+        , expect = esperar aoReceber faseDecoder
         }
 
 
-hint : Variant -> Board -> (Result String Hint -> msg) -> Cmd msg
-hint variant board toMsg =
-    Http.post
-        { url = "/api/hint"
-        , body = Http.jsonBody (encodeBoard variant board)
-        , expect = expectJson toMsg hintDecoder
-        }
+enviarJogada : Fase -> Estado -> Direcao -> (Result String Resposta -> msg) -> Cmd msg
+enviarJogada fase estado direcao aoReceber =
+    postar "/api/jogada"
+        (pedido fase estado [ ( "direcao", Encode.string (Jogo.nomeDirecao direcao) ) ])
+        (esperar aoReceber respostaDecoder)
 
 
+pedirSituacao : Fase -> Estado -> (Result String Situacao -> msg) -> Cmd msg
+pedirSituacao fase estado aoReceber =
+    postar "/api/situacao"
+        (pedido fase estado [])
+        (esperar aoReceber (Decode.field "situacao" situacaoDecoder))
 
--- JSON
---
--- Elm não converte JSON em valores "magicamente". Escrevemos DECODERS, que
--- descrevem a forma esperada do JSON. Se o JSON vier diferente, a decodificação
--- falha com uma mensagem de erro, em vez de gerar um valor inválido.
+
+pedirDica : Fase -> Estado -> (Result String Ajuda -> msg) -> Cmd msg
+pedirDica fase estado aoReceber =
+    postar "/api/dica" (pedido fase estado []) (esperar aoReceber ajudaDecoder)
 
 
-{-| Envia `{"board": [[5,3,0,...], ...], "variant": "diagonal"}`.
--}
-encodeBoard : Variant -> Board -> Encode.Value
-encodeBoard variant board =
+pedirDiagnostico : Consulta -> Fase -> Estado -> (Result String Ajuda -> msg) -> Cmd msg
+pedirDiagnostico consulta fase estado aoReceber =
+    postar "/api/diagnostico"
+        (pedido fase estado [ ( "consulta", codificarConsulta consulta ) ])
+        (esperar aoReceber ajudaDecoder)
+
+
+postar : String -> Encode.Value -> Http.Expect msg -> Cmd msg
+postar url corpo expect =
+    Http.post { url = url, body = Http.jsonBody corpo, expect = expect }
+
+
+pedido : Fase -> Estado -> List ( String, Encode.Value ) -> Encode.Value
+pedido fase estado extras =
     Encode.object
-        [ ( "board", Encode.list (Encode.list Encode.int) (Sudoku.toLists board) )
-        , ( "variant", Encode.string (variantToString variant) )
+        (( "fase", Encode.string fase.id )
+            :: ( "estado", codificarEstado estado )
+            :: extras
+        )
+
+
+codificarEstado : Estado -> Encode.Value
+codificarEstado estado =
+    Encode.object
+        [ ( "jogador", codificarPosicao estado.jogador [] )
+        , ( "caixas", Encode.list codificarCaixa estado.caixas )
+        , ( "entradas", Encode.list (Encode.list Encode.int) (matriz estado.entradas) )
         ]
 
 
-{-| Lê `{"board": [[...], ...]}`. Decoders se combinam como peças de Lego:
-`Decode.list (Decode.list Decode.int)` é "uma lista de listas de inteiros".
--}
-boardDecoder : Decoder Board
-boardDecoder =
-    Decode.field "board" (Decode.list (Decode.list Decode.int))
-        |> Decode.map Sudoku.fromLists
+codificarPosicao : Posicao -> List ( String, Encode.Value ) -> Encode.Value
+codificarPosicao ( linha, coluna ) extras =
+    Encode.object (( "linha", Encode.int linha ) :: ( "coluna", Encode.int coluna ) :: extras)
 
 
-{-| `Decode.map3` junta três decoders e passa os três resultados para a
-função `Hint` (o construtor do record).
--}
-hintDecoder : Decoder Hint
-hintDecoder =
-    Decode.map3 Hint
-        (Decode.field "row" Decode.int)
-        (Decode.field "col" Decode.int)
-        (Decode.field "value" Decode.int)
+codificarCaixa : Jogo.Caixa -> Encode.Value
+codificarCaixa caixa =
+    codificarPosicao caixa.posicao [ ( "numero", Encode.int caixa.numero ) ]
 
 
+codificarConsulta : Consulta -> Encode.Value
+codificarConsulta consulta =
+    case consulta of
+        Padrao ->
+            Encode.object [ ( "tipo", Encode.string "padrao" ) ]
 
--- TRATAMENTO DE ERROS
---
--- `Http.expectJson` já existe, mas quando o servidor responde com erro (ex.:
--- 422) ele descarta o corpo da resposta. Nosso backend manda uma mensagem útil
--- em `{"detail": "..."}`, então escrevemos nossa própria versão, que olha o
--- corpo e devolve sempre um `Result String a` com mensagens em português.
+        NaCasa posicao ->
+            codificarPosicao posicao [ ( "tipo", Encode.string "casa" ) ]
+
+        NaDirecao direcao ->
+            Encode.object
+                [ ( "tipo", Encode.string "direcao" )
+                , ( "direcao", Encode.string (Jogo.nomeDirecao direcao) )
+                ]
 
 
-expectJson : (Result String a -> msg) -> Decoder a -> Http.Expect msg
-expectJson toMsg decoder =
-    Http.expectStringResponse toMsg <|
-        \response ->
-            case response of
-                Http.GoodStatus_ _ body ->
-                    Decode.decodeString decoder body
+matriz : Dict Posicao Int -> List (List Int)
+matriz entradas =
+    List.map (linhaDe entradas) (List.range 1 4)
+
+
+linhaDe : Dict Posicao Int -> Int -> List Int
+linhaDe entradas linha =
+    List.range 1 4
+        |> List.map (\coluna -> Maybe.withDefault 0 (Dict.get ( linha, coluna ) entradas))
+
+
+resumoDecoder : Decoder ResumoFase
+resumoDecoder =
+    Decode.map2 ResumoFase
+        (Decode.field "id" Decode.string)
+        (Decode.field "nome" Decode.string)
+
+
+faseDecoder : Decoder Fase
+faseDecoder =
+    Decode.map5 Fase
+        (Decode.field "id" Decode.string)
+        (Decode.field "nome" Decode.string)
+        (Decode.field "armazem" armazemDecoder)
+        (Decode.field "sudoku" (Decode.nullable sudokuDecoder) |> Decode.map regra)
+        (Decode.field "inicio" estadoDecoder)
+
+
+regra : Maybe (Dict Posicao Jogo.Casa) -> Regra
+regra sudoku =
+    case sudoku of
+        Just casas ->
+            Combinada casas
+
+        Nothing ->
+            Classica
+
+
+posicaoDecoder : Decoder Posicao
+posicaoDecoder =
+    Decode.map2 Tuple.pair
+        (Decode.field "linha" Decode.int)
+        (Decode.field "coluna" Decode.int)
+
+
+letraDecoder : Decoder Jogo.Alvo
+letraDecoder =
+    Decode.map2 Jogo.Alvo
+        (Decode.field "letra" Decode.string)
+        posicaoDecoder
+
+
+ligacaoDecoder : Decoder Jogo.Ligacao
+ligacaoDecoder =
+    Decode.map2 Jogo.Ligacao
+        (Decode.field "letra" Decode.string)
+        posicaoDecoder
+
+
+armazemDecoder : Decoder Jogo.Armazem
+armazemDecoder =
+    Decode.map4 Jogo.Armazem
+        (Decode.field "linhas" Decode.int)
+        (Decode.field "colunas" Decode.int)
+        (Decode.field "paredes" (Decode.list posicaoDecoder))
+        (Decode.field "alvos" (Decode.list letraDecoder))
+
+
+sudokuDecoder : Decoder (Dict Posicao Jogo.Casa)
+sudokuDecoder =
+    Decode.map2 Jogo.montarSudoku
+        (Decode.field "pistas" (Decode.list (Decode.list Decode.int)))
+        (Decode.field "ligacoes" (Decode.list ligacaoDecoder))
+        |> Decode.andThen resultado
+
+
+caixaDecoder : Decoder Jogo.Caixa
+caixaDecoder =
+    Decode.map2 Jogo.Caixa
+        (Decode.field "numero" Decode.int)
+        posicaoDecoder
+
+
+estadoDecoder : Decoder Estado
+estadoDecoder =
+    Decode.map3 Estado
+        (Decode.field "jogador" posicaoDecoder)
+        (Decode.field "caixas" (Decode.list caixaDecoder))
+        (Decode.field "entradas" (Decode.list (Decode.list Decode.int))
+            |> Decode.andThen (Jogo.lerEntradas >> resultado)
+        )
+
+
+resultado : Result String a -> Decoder a
+resultado valor =
+    case valor of
+        Ok certo ->
+            Decode.succeed certo
+
+        Err erro ->
+            Decode.fail erro
+
+
+respostaDecoder : Decoder Resposta
+respostaDecoder =
+    Decode.map3 Resposta
+        (Decode.field "estado" estadoDecoder)
+        (Decode.field "movimento" movimentoDecoder)
+        (Decode.field "situacao" situacaoDecoder)
+
+
+movimentoDecoder : Decoder Movimento
+movimentoDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\texto ->
+                case texto of
+                    "caminhada" ->
+                        Decode.succeed Caminhou
+
+                    "empurrao" ->
+                        Decode.succeed Empurrou
+
+                    "bloqueado" ->
+                        Decode.succeed Bloqueado
+
+                    _ ->
+                        Decode.fail ("Movimento desconhecido: " ++ texto)
+            )
+
+
+situacaoDecoder : Decoder Situacao
+situacaoDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\texto ->
+                case texto of
+                    "jogando" ->
+                        Decode.succeed EmJogo
+
+                    "vitoria" ->
+                        Decode.succeed Vitoria
+
+                    _ ->
+                        Decode.fail ("Situacao desconhecida: " ++ texto)
+            )
+
+
+ajudaDecoder : Decoder Ajuda
+ajudaDecoder =
+    Decode.map3 Ajuda
+        (Decode.field "texto" Decode.string)
+        (Decode.field "destaques" (Decode.list destaqueDecoder))
+        (Decode.field "dados" Decode.value)
+
+
+destaqueDecoder : Decoder Destaque
+destaqueDecoder =
+    Decode.map3 Destaque
+        (Decode.field "tabuleiro" tabuleiroDecoder)
+        posicaoDecoder
+        (Decode.field "marca" Decode.string)
+
+
+tabuleiroDecoder : Decoder Tabuleiro
+tabuleiroDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\texto ->
+                case texto of
+                    "armazem" ->
+                        Decode.succeed NoArmazem
+
+                    "sudoku" ->
+                        Decode.succeed NoSudoku
+
+                    _ ->
+                        Decode.fail ("Tabuleiro desconhecido: " ++ texto)
+            )
+
+
+esperar : (Result String a -> msg) -> Decoder a -> Http.Expect msg
+esperar aoReceber decoder =
+    Http.expectStringResponse aoReceber <|
+        \resposta ->
+            case resposta of
+                Http.GoodStatus_ _ corpo ->
+                    Decode.decodeString decoder corpo
                         |> Result.mapError (\_ -> "Resposta inesperada do servidor.")
 
-                Http.BadStatus_ metadata body ->
-                    Err (errorDetail metadata.statusCode body)
+                Http.BadStatus_ metadados corpo ->
+                    Err (detalhe metadados.statusCode corpo)
 
                 Http.BadUrl_ url ->
-                    Err ("URL inválida: " ++ url)
+                    Err ("Endereco invalido: " ++ url)
 
                 Http.Timeout_ ->
                     Err "O servidor demorou demais para responder."
 
                 Http.NetworkError_ ->
-                    Err "Não foi possível falar com o servidor. O backend está rodando?"
+                    Err "Sem conexao com o servidor. O backend esta rodando?"
 
 
-{-| Tenta extrair o campo `detail` (quando ele é uma string). Se não der,
-monta uma mensagem genérica com o código HTTP.
--}
-errorDetail : Int -> String -> String
-errorDetail status body =
-    case Decode.decodeString (Decode.field "detail" Decode.string) body of
-        Ok detail ->
-            detail
+detalhe : Int -> String -> String
+detalhe status corpo =
+    case Decode.decodeString (Decode.field "detail" Decode.string) corpo of
+        Ok texto ->
+            texto
 
         Err _ ->
-            "Erro no servidor (código " ++ String.fromInt status ++ ")."
+            "Erro no servidor (codigo " ++ String.fromInt status ++ ")."

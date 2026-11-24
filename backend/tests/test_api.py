@@ -1,121 +1,138 @@
-"""Testes da API HTTP (pytest).
-
-Usamos o TestClient do FastAPI: ele chama a aplicação diretamente, sem subir
-um servidor nem abrir porta. Cada função `test_*` é um teste; o pytest as
-encontra sozinho.
-
-Rodar: `uv run pytest` (na pasta backend) ou `make test-backend` (na raiz).
-
-As regras do Sudoku são testadas em Prolog (prolog/test_sudoku.pl). Aqui
-conferimos só a "cola": rotas, formato do JSON e códigos de status.
-"""
-
 from fastapi.testclient import TestClient
 
 from app.main import app
 
-client = TestClient(app)
+cliente = TestClient(app)
 
-# O mesmo puzzle de example_puzzle/1 em sudoku.pl.
-EXAMPLE = [
-    [5, 3, 0, 0, 7, 0, 0, 0, 0],
-    [6, 0, 0, 1, 9, 5, 0, 0, 0],
-    [0, 9, 8, 0, 0, 0, 0, 6, 0],
-    [8, 0, 0, 0, 6, 0, 0, 0, 3],
-    [4, 0, 0, 8, 0, 3, 0, 0, 1],
-    [7, 0, 0, 0, 2, 0, 0, 0, 6],
-    [0, 6, 0, 0, 0, 0, 2, 8, 0],
-    [0, 0, 0, 4, 1, 9, 0, 0, 5],
-    [0, 0, 0, 0, 8, 0, 0, 7, 9],
-]
+CORRETAS = [[0, 0, 3, 0], [0, 0, 1, 2], [0, 0, 0, 0], [0, 0, 2, 0]]
+LETRAS = {"C": "cima", "B": "baixo", "E": "esquerda", "D": "direita"}
 
 
-def solved_example() -> list[list[int]]:
-    """A solução do puzzle de exemplo, obtida pela própria API."""
-    return client.post("/api/solve", json={"board": EXAMPLE}).json()["board"]
+def inicio(fase, entradas=None):
+    estado = cliente.get(f"/api/fases/{fase}").json()["inicio"]
+    if entradas is not None:
+        estado["entradas"] = entradas
+    return estado
 
 
-def test_solve():
-    response = client.post("/api/solve", json={"board": EXAMPLE})
-    assert response.status_code == 200
-    assert response.json()["board"][0] == [5, 3, 4, 6, 7, 8, 9, 1, 2]
+def jogar(fase, estado, percurso):
+    resposta = None
+    for letra in percurso:
+        pedido = {"fase": fase, "estado": estado, "direcao": LETRAS[letra]}
+        resposta = cliente.post("/api/jogada", json=pedido).json()
+        estado = resposta["estado"]
+    return resposta
 
 
-def test_solve_without_solution():
-    board = [row[:] for row in EXAMPLE]  # cópia, para não alterar EXAMPLE
-    board[0][2] = 5  # dois 5 na primeira linha
-    response = client.post("/api/solve", json={"board": board})
-    assert response.status_code == 422
+def test_lista_as_fases_da_base():
+    resposta = cliente.get("/api/fases")
+    assert resposta.status_code == 200
+    ids = [fase["id"] for fase in resposta.json()]
+    assert ids[:2] == ["tutorial", "comum"]
 
 
-def test_solve_rejects_malformed_board():
-    # Quem rejeita aqui é o Pydantic, antes de o Prolog ser chamado.
-    response = client.post("/api/solve", json={"board": [[1, 2, 3]]})
-    assert response.status_code == 422
+def test_fase_comum_tem_sudoku_e_ligacoes():
+    fase = cliente.get("/api/fases/comum").json()
+    assert fase["sudoku"]["pistas"][0] == [1, 0, 0, 4]
+    assert {"letra": "A", "linha": 1, "coluna": 2} in fase["sudoku"]["ligacoes"]
+    assert fase["inicio"]["jogador"] == {"linha": 1, "coluna": 3}
 
 
-def test_generate():
-    response = client.post("/api/generate", json={"difficulty": "easy"})
-    assert response.status_code == 200
-    board = response.json()["board"]
-    assert len(board) == 9 and all(len(row) == 9 for row in board)
-    assert 0 in sum(board, [])  # sum(..., []) concatena as linhas: há casa vazia
+def test_tutorial_nao_tem_sudoku():
+    assert cliente.get("/api/fases/tutorial").json()["sudoku"] is None
 
 
-def test_hint():
-    response = client.post("/api/hint", json={"board": EXAMPLE})
-    assert response.status_code == 200
-    hint = response.json()
-    assert EXAMPLE[hint["row"]][hint["col"]] == 0  # a dica é para uma casa vazia
+def test_caminhada_e_empurrao():
+    estado = inicio("comum")
+    andou = jogar("comum", estado, "E")
+    assert andou["movimento"] == "caminhada"
+    empurrou = jogar("comum", andou["estado"], "B")
+    assert empurrou["movimento"] == "empurrao"
+    assert {"numero": 2, "linha": 3, "coluna": 2} in empurrou["estado"]["caixas"]
 
 
-def test_hint_on_complete_board():
-    response = client.post("/api/hint", json={"board": solved_example()})
-    assert response.status_code == 422
-    assert response.json()["detail"] == "O tabuleiro já está completo."
+def test_parede_mantem_o_estado():
+    estado = inicio("comum")
+    resposta = jogar("comum", estado, "C")
+    assert resposta["movimento"] == "bloqueado"
+    assert resposta["estado"] == estado
 
 
-def test_hint_on_full_board_with_errors():
-    board = solved_example()
-    board[0][0], board[0][1] = board[0][1], board[0][0]  # troca dois números
-    response = client.post("/api/hint", json={"board": board})
-    assert response.status_code == 422
-    assert "não tem solução" in response.json()["detail"]
+def test_vitoria_com_as_quatro_entradas():
+    resposta = jogar("comum", inicio("comum", CORRETAS), "EBCDDB")
+    assert resposta["situacao"] == "vitoria"
 
 
-# --- Sudoku diagonal ------------------------------------------------------
-# As regras ficam no Prolog (testadas em test_sudoku.pl). Aqui conferimos
-# que o campo "variant" chega até lá e que um valor desconhecido é barrado.
+def test_sem_uma_entrada_a_partida_continua():
+    entradas = [linha[:] for linha in CORRETAS]
+    entradas[3][2] = 0
+    assert jogar("comum", inicio("comum", entradas), "EBCDDB")["situacao"] == "jogando"
 
 
-def diagonals(board: list[list[int]]) -> tuple[list[int], list[int]]:
-    main = [board[i][i] for i in range(9)]
-    anti = [board[i][8 - i] for i in range(9)]
-    return main, anti
+def test_caixas_trocadas_vencem_so_no_tutorial():
+    trocado = "EBEBDDCCDDBEECEB"
+    assert jogar("tutorial", inicio("tutorial"), trocado)["situacao"] == "vitoria"
+    assert jogar("comum", inicio("comum", CORRETAS), trocado)["situacao"] == "jogando"
 
 
-def test_generate_and_solve_diagonal():
-    puzzle = client.post(
-        "/api/generate", json={"difficulty": "easy", "variant": "diagonal"}
-    ).json()["board"]
-    response = client.post("/api/solve", json={"board": puzzle, "variant": "diagonal"})
-    assert response.status_code == 200
-    for diagonal in diagonals(response.json()["board"]):
-        assert sorted(diagonal) == list(range(1, 10))
+def test_situacao_depois_de_digitar():
+    estado = jogar("comum", inicio("comum"), "EBCDDB")["estado"]
+    estado["entradas"] = CORRETAS
+    resposta = cliente.post("/api/situacao", json={"fase": "comum", "estado": estado})
+    assert resposta.json() == {"situacao": "vitoria"}
 
 
-def test_classic_example_has_no_diagonal_solution():
-    response = client.post("/api/solve", json={"board": EXAMPLE, "variant": "diagonal"})
-    assert response.status_code == 422
+def test_dica_inicial_aponta_um_passo():
+    resposta = cliente.post("/api/dica", json={"fase": "comum", "estado": inicio("comum")})
+    ajuda = resposta.json()
+    assert ajuda["dados"]["situacao"] == "passo"
+    assert ajuda["dados"]["passos"] == 6
+    assert ajuda["destaques"][0]["tabuleiro"] == "armazem"
 
 
-def test_hint_respects_variant():
-    response = client.post("/api/hint", json={"board": EXAMPLE, "variant": "classic"})
-    assert response.status_code == 200
-    response = client.post("/api/hint", json={"board": EXAMPLE, "variant": "diagonal"})
-    assert response.status_code == 422  # sem solução diagonal, sem dica
+def test_dica_informa_impasse():
+    estado = jogar("comum", inicio("comum"), "EEBBDCDCE")["estado"]
+    assert {"numero": 2, "linha": 1, "coluna": 1} in estado["caixas"]
+    ajuda = cliente.post("/api/dica", json={"fase": "comum", "estado": estado}).json()
+    assert ajuda["dados"]["situacao"] == "impasse"
 
 
-def test_unknown_variant_is_rejected():
-    response = client.post("/api/solve", json={"board": EXAMPLE, "variant": "killer"})
-    assert response.status_code == 422
+def test_dica_pede_revisao_de_entrada_contraditoria():
+    estado = inicio("comum", [[0, 0, 2, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    ajuda = cliente.post("/api/dica", json={"fase": "comum", "estado": estado}).json()
+    assert ajuda["dados"]["situacao"] == "revisar"
+    assert ajuda["destaques"] == [
+        {"tabuleiro": "sudoku", "linha": 1, "coluna": 3, "marca": "revisar"}
+    ]
+
+
+def test_estado_invalido_e_recusado():
+    estado = inicio("comum")
+    estado["jogador"] = {"linha": 2, "coluna": 2}
+    resposta = cliente.post("/api/situacao", json={"fase": "comum", "estado": estado})
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"] == "Estado invalido para esta fase."
+
+
+def test_entrada_em_pista_e_recusada():
+    estado = inicio("comum", [[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    resposta = cliente.post("/api/situacao", json={"fase": "comum", "estado": estado})
+    assert resposta.status_code == 422
+
+
+def test_fase_desconhecida():
+    assert cliente.get("/api/fases/nenhuma").status_code == 404
+    pedido = {"fase": "nenhuma", "estado": inicio("comum")}
+    assert cliente.post("/api/situacao", json=pedido).status_code == 404
+
+
+def test_pedido_malformado():
+    pedido = {"fase": "comum", "estado": {"jogador": [1, 3]}}
+    assert cliente.post("/api/situacao", json=pedido).status_code == 422
+
+
+def test_fase_da_base_sem_diagnostico():
+    pedido = {"fase": "comum", "estado": inicio("comum"), "consulta": {"tipo": "padrao"}}
+    resposta = cliente.post("/api/diagnostico", json=pedido)
+    assert resposta.status_code == 404
+    assert resposta.json()["detail"] == "Esta fase nao tem diagnostico."

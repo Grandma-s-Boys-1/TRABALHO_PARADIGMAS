@@ -3,40 +3,44 @@ module Fases.DicaTest exposing (suite)
 import Ajuda exposing (TipoConsulta(..))
 import Expect
 import Fases.Dica exposing (modulo, planoDecoder, roteiro)
-import Jogo exposing (Direcao(..))
 import Json.Decode as Decode
 import Test exposing (Test, describe, test)
+
+
+exemplo : { caminhada : List String, caixa : Int, empurrao : String, total : Int }
+exemplo =
+    { caminhada = [ "cima", "cima", "direita" ], caixa = 4, empurrao = "baixo", total = 8 }
 
 
 suite : Test
 suite =
     describe "Fases.Dica"
-        [ test "caminhadas antes do empurrao" <|
+        [ test "roteiro do exemplo" <|
             \_ ->
-                roteiro { caminhada = [ Cima, Cima, Direita ], caixa = 4, direcao = Baixo }
+                roteiro exemplo
                     |> Expect.equal
-                        [ "Caminhar para cima"
-                        , "Caminhar para cima"
-                        , "Caminhar para direita"
-                        , "Empurrar a caixa 4 para baixo"
+                        [ "Caminhe: C C D (3 passos)"
+                        , "Empurre a caixa 4: baixo"
+                        , "Rota minima: 8 passos"
                         ]
-        , test "empurrao imediato" <|
+        , test "roteiro sem caminhada" <|
             \_ ->
-                roteiro { caminhada = [], caixa = 2, direcao = Baixo }
-                    |> Expect.equal [ "Empurrar a caixa 2 para baixo" ]
+                roteiro { exemplo | caminhada = [], total = 5 }
+                    |> Expect.equal
+                        [ "Caminhe: nenhum passo"
+                        , "Empurre a caixa 4: baixo"
+                        , "Rota minima: 5 passos"
+                        ]
         , test "decoder le o plano" <|
             \_ ->
                 Decode.decodeString planoDecoder
-                    """{"caminhada": ["cima", "cima", "direita"], "caixa": 4, "direcao": "baixo"}"""
-                    |> Expect.equal (Ok { caminhada = [ Cima, Cima, Direita ], caixa = 4, direcao = Baixo })
-        , test "decoder recusa direcao desconhecida" <|
+                    """{"caminhada": ["cima", "cima", "direita"], "caixa": 4,
+                        "empurrao": "baixo", "total": 8}"""
+                    |> Expect.equal (Ok exemplo)
+        , test "decoder com campo ausente" <|
             \_ ->
                 Decode.decodeString planoDecoder
-                    """{"caminhada": ["diagonal"], "caixa": 4, "direcao": "baixo"}"""
-                    |> Expect.err
-        , test "decoder recusa dados vazios" <|
-            \_ ->
-                Decode.decodeString planoDecoder "{}"
+                    """{"caminhada": ["cima"], "caixa": 4, "empurrao": "baixo"}"""
                     |> Expect.err
         , test "modulo usa a consulta padrao" <|
             \_ ->

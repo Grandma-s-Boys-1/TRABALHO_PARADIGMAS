@@ -19,15 +19,16 @@ def test_primeiro_empurrao_no_inicio():
     assert ajuda["dados"] == {
         "caminhada": ["cima", "cima", "direita"],
         "caixa": 4,
-        "direcao": "baixo",
+        "empurrao": "baixo",
+        "total": 8,
     }
     marcas = [(d["linha"], d["coluna"], d["marca"]) for d in ajuda["destaques"]]
     assert marcas == [
+        (2, 4, "caixa"),
+        (3, 4, "destino"),
         (2, 3, "passo"),
         (1, 3, "passo"),
         (1, 4, "passo"),
-        (2, 4, "dica"),
-        (3, 4, "destino"),
     ]
 
 

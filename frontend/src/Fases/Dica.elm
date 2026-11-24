@@ -1,16 +1,16 @@
-module Fases.Dica exposing (Plano, modulo, planoDecoder, roteiro)
+module Fases.Dica exposing (modulo, planoDecoder, roteiro)
 
 import Ajuda exposing (Ajuda, Modulo, TipoConsulta(..))
-import Html exposing (Html, div, li, ol, p, text)
+import Html exposing (Html, div, li, p, text, ul)
 import Html.Attributes exposing (class)
-import Jogo exposing (Direcao)
 import Json.Decode as Decode exposing (Decoder)
 
 
 type alias Plano =
-    { caminhada : List Direcao
+    { caminhada : List String
     , caixa : Int
-    , direcao : Direcao
+    , empurrao : String
+    , total : Int
     }
 
 
@@ -25,40 +25,47 @@ modulo =
 
 roteiro : Plano -> List String
 roteiro plano =
-    List.map caminhar plano.caminhada ++ [ empurrar plano.caixa plano.direcao ]
+    [ caminhe plano.caminhada
+    , "Empurre a caixa " ++ String.fromInt plano.caixa ++ ": " ++ plano.empurrao
+    , "Rota minima: " ++ String.fromInt plano.total ++ " passos"
+    ]
 
 
-caminhar : Direcao -> String
-caminhar direcao =
-    "Caminhar para " ++ Jogo.nomeDirecao direcao
+caminhe : List String -> String
+caminhe caminhada =
+    case caminhada of
+        [] ->
+            "Caminhe: nenhum passo"
+
+        _ ->
+            "Caminhe: "
+                ++ String.join " " (List.map letra caminhada)
+                ++ " ("
+                ++ passos (List.length caminhada)
+                ++ ")"
 
 
-empurrar : Int -> Direcao -> String
-empurrar caixa direcao =
-    "Empurrar a caixa " ++ String.fromInt caixa ++ " para " ++ Jogo.nomeDirecao direcao
+letra : String -> String
+letra direcao =
+    String.toUpper (String.left 1 direcao)
+
+
+passos : Int -> String
+passos quantidade =
+    if quantidade == 1 then
+        "1 passo"
+
+    else
+        String.fromInt quantidade ++ " passos"
 
 
 planoDecoder : Decoder Plano
 planoDecoder =
-    Decode.map3 Plano
-        (Decode.field "caminhada" (Decode.list direcaoDecoder))
+    Decode.map4 Plano
+        (Decode.field "caminhada" (Decode.list Decode.string))
         (Decode.field "caixa" Decode.int)
-        (Decode.field "direcao" direcaoDecoder)
-
-
-direcaoDecoder : Decoder Direcao
-direcaoDecoder =
-    Decode.string |> Decode.andThen direcaoDoNome
-
-
-direcaoDoNome : String -> Decoder Direcao
-direcaoDoNome nome =
-    case List.filter (\direcao -> Jogo.nomeDirecao direcao == nome) Jogo.direcoes of
-        direcao :: _ ->
-            Decode.succeed direcao
-
-        [] ->
-            Decode.fail ("Direcao desconhecida: " ++ nome)
+        (Decode.field "empurrao" Decode.string)
+        (Decode.field "total" Decode.int)
 
 
 exibir : Ajuda -> Html Never
@@ -66,9 +73,14 @@ exibir ajuda =
     case Decode.decodeValue planoDecoder ajuda.dados of
         Ok plano ->
             div [ class "modulo" ]
-                [ p [ class "modulo-titulo" ] [ text "Ate o primeiro empurrao" ]
-                , ol [ class "lista" ] (List.map (\linha -> li [] [ text linha ]) (roteiro plano))
+                [ p [ class "modulo-titulo" ] [ text "Primeiro empurrao" ]
+                , ul [ class "lista" ] (List.map item (roteiro plano))
                 ]
 
         Err _ ->
             p [ class "legenda" ] [ text "Sem empurrao a mostrar." ]
+
+
+item : String -> Html Never
+item linha =
+    li [] [ text linha ]

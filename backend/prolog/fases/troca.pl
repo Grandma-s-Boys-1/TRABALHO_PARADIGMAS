@@ -27,7 +27,7 @@ diagnostico(Fase, Estado, padrao, ajuda(Texto, Destaques, Dados)) :-
         unidades_em_conflito(Grade, Nomes),
         ligadas(Fase, Estado, Ligadas),
         texto(Nomes, Ligadas, Texto),
-        destaques(Fase, Nomes, Destaques),
+        destaques(Nomes, Fase, Destaques),
         dados(Nomes, Dados)
     ; Texto = "Ocupe os dois alvos para conferir.",
       Destaques = [],
@@ -55,8 +55,8 @@ nome_unidade(Unidade, Nome) :-
     Unidade =.. [Tipo, Numero],
     format(string(Nome), "~w ~d", [Tipo, Numero]).
 
-destaques(_, [], []).
-destaques(Fase, [_|_], Destaques) :-
+destaques([], _, []).
+destaques([_|_], Fase, Destaques) :-
     Fase = fase(_, _, combinada(_, Ligacoes), _),
     findall(sudoku(Posicao, conflito), member(_-Posicao, Ligacoes), Destaques).
 

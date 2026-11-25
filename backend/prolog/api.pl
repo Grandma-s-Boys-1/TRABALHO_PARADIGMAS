@@ -91,7 +91,8 @@ pedir_diagnostico(Texto, J, Cs, E, Pedido, Mensagem, Destaques, Dados) :-
 
 consulta([Tipo|Argumentos], Consulta) :-
     atom_string(Nome, Tipo),
-    consulta_de(Nome, Argumentos, Consulta).
+    % Cada pedido da API tem uma unica interpretacao, por isso basta a primeira solucao.
+    once(consulta_de(Nome, Argumentos, Consulta)).
 
 consulta_de(padrao, [], padrao).
 consulta_de(casa, [L, C], casa(L, C)).

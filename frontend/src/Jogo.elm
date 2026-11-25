@@ -267,6 +267,7 @@ valorCasa fase estado posicao =
             Dict.get posicao estado.entradas
 
         Just (Ligada letra) ->
+            -- Ler a caixa no alvo evita guardar o mesmo numero em dois lugares.
             caixaNoAlvo fase.armazem estado letra
 
         Nothing ->

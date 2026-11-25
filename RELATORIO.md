@@ -15,7 +15,7 @@
 - **Nome do projeto:** Sokoban Sudoku
 - **Nome do grupo:** Grandma's Boys 1
 - **Repositório:** https://github.com/Grandma-s-Boys-1/TRABALHO_PARADIGMAS
-- **Commit ou tag entregue:** `v1.0`
+- **Commit ou tag entregue:** `6a8bdfb15e0aec85eac3778dae48efd33616dcbd`
 - **Ponto de partida:** remix original
 - **Slides da apresentação oral:** `docs/apresentacao.pdf`
 
